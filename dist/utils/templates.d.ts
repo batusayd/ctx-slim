@@ -12,7 +12,12 @@ export declare function generateClaudeSlashCommands(): Record<string, string>;
  * Generates official Claude Code `.claude/settings.json` `permissions.deny` rules
  * so Claude Code is prevented at the tool permission layer from reading lockfiles and build bloat.
  */
-export declare function getClaudeSettingsDenyRules(stacks: DetectedStack[]): string[];
+/**
+ * Generates official Claude Code `.claude/settings.json` `permissions.deny` rules.
+ * In global mode (`isGlobal = true`), only blocks package manager lockfiles so project-specific
+ * `build/`, `dist/`, or `.map` debugging is never globally obstructed.
+ */
+export declare function getClaudeSettingsDenyRules(stacks: DetectedStack[], isGlobal?: boolean): string[];
 /**
  * Generates a safe post-commit hook that NEVER executes an arbitrary `./dist/index.js` in the user's repo.
  * It resolves either global `ctx-slim`, local `./node_modules/.bin/ctx-slim`, or the verified CLI installation path.

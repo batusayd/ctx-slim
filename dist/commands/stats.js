@@ -41,13 +41,13 @@ const ui_1 = require("../utils/ui");
 const map_1 = require("./map");
 const MODEL_PRICING_LIST = [
     {
-        name: 'Claude Opus 4.5 / 4',
+        name: 'Claude Opus 4.6 / 4.5',
         provider: 'Anthropic',
-        inputPerMillionUsd: 15.0,
-        cachedInputPerMillionUsd: 1.5,
+        inputPerMillionUsd: 5.0,
+        cachedInputPerMillionUsd: 0.5,
     },
     {
-        name: 'Claude Sonnet 4.5 / 4',
+        name: 'Claude Sonnet 4.6 / 4.5',
         provider: 'Anthropic',
         inputPerMillionUsd: 3.0,
         cachedInputPerMillionUsd: 0.3,
@@ -157,18 +157,20 @@ function runStatsCommand(options) {
     // Target read window = symbol span + ±15 lines safety buffer
     const avgTargetedSliceLines = avgSymbolLines + 30;
     const avgTargetedSliceTokens = Math.min(avgFileTokens, Math.round(avgTargetedSliceLines * avgTokensPerLine));
-    // Realistic Task Modeling:
-    // Baseline (No ctx-slim): Agent runs grep/glob and reads ~4 candidate files in full (or all files if repo < 4 files)
-    const candidateFilesPerTask = Math.min(totalFiles, 4);
+    // Realistic Task Modeling (Uncapped REPO_MAP.md token cost):
+    // Baseline (No ctx-slim): Agent runs grep/glob and reads ~3 candidate files in full (or all files if repo < 3 files)
+    const candidateFilesPerTask = Math.min(totalFiles, 3);
     const baselineTaskTokens = Math.min(rawSourceTokens, avgFileTokens * candidateFilesPerTask);
-    // With ctx-slim: Compact CLAUDE.md rule block (~155 tok) + REPO_MAP lookup + 2 targeted symbol range reads
+    // With ctx-slim: Compact CLAUDE.md rule block (~155 tok) + full REPO_MAP.md + 2 targeted symbol range reads
     const ruleOverheadTokens = 155;
     const targetedSlicesCount = Math.min(candidateFilesPerTask, 2);
-    const slimTaskTokens = Math.min(baselineTaskTokens, ruleOverheadTokens +
-        Math.min(mapResult.mapTokens, 1200) +
-        avgTargetedSliceTokens * targetedSlicesCount);
+    const slimTaskTokens = ruleOverheadTokens +
+        mapResult.mapTokens +
+        avgTargetedSliceTokens * targetedSlicesCount;
     const savedPerTaskTokens = Math.max(0, baselineTaskTokens - slimTaskTokens);
-    const savedPerTaskPct = baselineTaskTokens > 0 ? (savedPerTaskTokens / baselineTaskTokens) * 100 : 0;
+    const savedPerTaskPct = baselineTaskTokens > 0
+        ? ((baselineTaskTokens - slimTaskTokens) / baselineTaskTokens) * 100
+        : 0;
     const tasksPerSession = 15;
     if (options.json) {
         const jsonOutput = {
@@ -243,11 +245,13 @@ function runStatsCommand(options) {
             'Standard agent exploration',
         ],
         [
-            `${ui_1.c.bold(ui_1.c.brightGreen('ctx-slim Task Read'))} ${ui_1.c.gray('(Rule + Map + 2 symbol slices)')}`,
+            `${ui_1.c.bold(ui_1.c.brightGreen('ctx-slim Task Read'))} ${ui_1.c.gray('(Rule + Full Map + 2 slices)')}`,
             `${targetedSlicesCount} slices`,
             `~${(0, ui_1.formatNumber)(avgTargetedSliceLines * targetedSlicesCount)} lines`,
             ui_1.c.bold(ui_1.c.brightGreen(`${(0, ui_1.formatNumber)(slimTaskTokens)} tok`)),
-            ui_1.c.bold(ui_1.c.brightGreen(`-${savedPerTaskPct.toFixed(1)}% net input reduction`)),
+            savedPerTaskPct > 0
+                ? ui_1.c.bold(ui_1.c.brightGreen(`-${savedPerTaskPct.toFixed(1)}% vs ${candidateFilesPerTask}-file read`))
+                : ui_1.c.yellow('Small repo: direct read/grep is cheaper than map'),
         ],
     ];
     console.log(`  ${ui_1.c.bold('📊 1. Empirical Repository & Task Token Breakdown')}`);
@@ -278,6 +282,6 @@ function runStatsCommand(options) {
         'Saved (Cached)',
     ], costRows, ['left', 'right', 'right', 'right', 'right', 'right']));
     console.log('');
-    console.log(`  ${ui_1.c.cyan('ℹ')} ${ui_1.c.bold('Methodology')}: Token counts use lexical BPE approximation. Task comparison models reading ${candidateFilesPerTask} candidate files in full (${(0, ui_1.formatNumber)(baselineTaskTokens)} tok) vs ${ui_1.c.brightCyan('ctx-slim')} rule overhead (${ruleOverheadTokens} tok) + map lookup + ${targetedSlicesCount} empirical symbol slices (${avgSymbolLines}L + ±15L buffer = ${(0, ui_1.formatNumber)(avgTargetedSliceTokens)} tok/slice).`);
+    console.log(`  ${ui_1.c.cyan('ℹ')} ${ui_1.c.bold('Methodology (Heuristic Estimate, Not Live Telemetry)')}: Token counts use lexical BPE approximation. Compares reading ${candidateFilesPerTask} full files (${(0, ui_1.formatNumber)(baselineTaskTokens)} tok) vs ${ui_1.c.brightCyan('ctx-slim')} rule overhead (${ruleOverheadTokens} tok) + uncapped REPO_MAP.md (${(0, ui_1.formatNumber)(mapResult.mapTokens)} tok) + ${targetedSlicesCount} symbol slices (${avgSymbolLines}L + ±15L buffer = ${(0, ui_1.formatNumber)(avgTargetedSliceTokens)} tok/slice).`);
     console.log('');
 }

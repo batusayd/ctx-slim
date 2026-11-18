@@ -70,15 +70,16 @@ interface ScanState {
 
 /**
  * Finds the closing line (1-based) of a brace-delimited block starting at `startLineIdx` (0-based).
- * Scans the entire file without artificial line limits, tracking strings, regexes, template literals,
- * and multi-line block comments. Does NOT treat `#` as a comment in TS/JS/Go/Rust/C#/Java (preserving `#private` fields and `#[attr]`).
+ * Tracks parenthesis depth `( ... )` so destructured parameters (`function foo({ a, b }: Props)`)
+ * or default object parameters (`opts = {}`) inside parameter lists never prematurely terminate the block.
  */
 function findBraceBlockEnd(
   lines: string[],
   startLineIdx: number,
   allowHashComment: boolean = false
 ): number {
-  let depth = 0;
+  let braceDepth = 0;
+  let parenDepth = 0;
   let foundOpenBrace = false;
   let state: ScanState = { inBacktick: false, inBlockComment: false };
 
@@ -89,19 +90,51 @@ function findBraceBlockEnd(
 
     for (let c = 0; c < line.length; c++) {
       const ch = line[c];
+
+      if (!foundOpenBrace) {
+        if (ch === '(') {
+          parenDepth++;
+          continue;
+        } else if (ch === ')') {
+          if (parenDepth > 0) parenDepth--;
+          continue;
+        }
+      }
+
+      // Ignore `{` and `}` that appear inside parameter lists `(...)` before the body block opens
+      if (!foundOpenBrace && parenDepth > 0) {
+        continue;
+      }
+
       if (ch === '{') {
-        depth++;
+        braceDepth++;
         foundOpenBrace = true;
       } else if (ch === '}') {
-        depth--;
-        if (foundOpenBrace && depth <= 0) {
-          return i + 1;
+        if (foundOpenBrace) {
+          braceDepth--;
+          if (braceDepth <= 0) {
+            // Check if the rest of this line immediately opens a body `{` or `=>`
+            // (which happens when a return-type annotation `: { x: number } {` closes before the body `{`)
+            const restOfLine = line.slice(c + 1).trim();
+            if (restOfLine.startsWith('{') || restOfLine.startsWith('=>')) {
+              foundOpenBrace = false;
+              braceDepth = 0;
+              continue;
+            }
+            return i + 1;
+          }
         }
       }
     }
 
-    // Single-line or interface/type declaration ending with semicolon before any brace block opens
-    if (!foundOpenBrace && !state.inBacktick && !state.inBlockComment && line.trim().endsWith(';')) {
+    // Single-line declaration ending with semicolon before any body brace block opens
+    if (
+      !foundOpenBrace &&
+      parenDepth === 0 &&
+      !state.inBacktick &&
+      !state.inBlockComment &&
+      line.trim().endsWith(';')
+    ) {
       return i + 1;
     }
   }
@@ -155,7 +188,6 @@ function stripCodeNoiseStateful(
         i++;
         continue;
       }
-      // Only treat `#` as a comment in PHP (when not `#[` attribute), never in TS/JS (`#private`) or Rust (`#[derive]`)
       if (allowHashComment && ch === '#' && next !== '[') {
         break;
       }
@@ -191,6 +223,8 @@ function stripCodeNoiseStateful(
 
 /**
  * Finds the closing line (1-based) of a Python indented block starting at `startLineIdx` (0-based).
+ * Properly handles multi-line `def` / `class` signatures (`def foo(\n  a,\n  b,\n):`) and
+ * multi-line bracketed expressions or triple-quoted strings inside the body.
  */
 function findPythonBlockEnd(lines: string[], startLineIdx: number): number {
   const startLine = lines[startLineIdx];
@@ -198,18 +232,81 @@ function findPythonBlockEnd(lines: string[], startLineIdx: number): number {
   const baseIndent = baseIndentMatch ? baseIndentMatch[1].length : 0;
   let lastValidLine = startLineIdx + 1;
 
-  for (let i = startLineIdx + 1; i < lines.length; i++) {
+  let signatureEnded = false;
+  let bracketDepth = 0;
+  let tripleQuoteChar: '"""' | "'''" | null = null;
+
+  for (let i = startLineIdx; i < lines.length; i++) {
     const raw = lines[i];
     const trimmed = raw.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
 
-    const indentMatch = raw.match(/^(\s*)/);
-    const currentIndent = indentMatch ? indentMatch[1].length : 0;
-
-    if (currentIndent <= baseIndent) {
-      break;
+    if (i > startLineIdx && signatureEnded && !tripleQuoteChar && bracketDepth <= 0) {
+      if (!trimmed || trimmed.startsWith('#')) {
+        continue;
+      }
+      const indentMatch = raw.match(/^(\s*)/);
+      const currentIndent = indentMatch ? indentMatch[1].length : 0;
+      if (currentIndent <= baseIndent) {
+        break;
+      }
     }
-    lastValidLine = i + 1;
+
+    // Scan characters on this line to update triple-quote state and bracket depth
+    let inSingle = false;
+    let inDouble = false;
+    let cleanWithoutComment = '';
+
+    for (let c = 0; c < raw.length; c++) {
+      const ch = raw[c];
+      const prev = c > 0 ? raw[c - 1] : '';
+      const three = raw.slice(c, c + 3);
+
+      if (tripleQuoteChar) {
+        if (three === tripleQuoteChar && prev !== '\\') {
+          tripleQuoteChar = null;
+          c += 2;
+        }
+        continue;
+      }
+
+      if (!inSingle && !inDouble) {
+        if (three === '"""' || three === "'''") {
+          tripleQuoteChar = three as '"""' | "'''";
+          c += 2;
+          continue;
+        }
+        if (ch === '#') {
+          break;
+        }
+      }
+
+      if (ch === "'" && !inDouble && prev !== '\\') {
+        inSingle = !inSingle;
+        continue;
+      }
+      if (ch === '"' && !inSingle && prev !== '\\') {
+        inDouble = !inDouble;
+        continue;
+      }
+
+      if (!inSingle && !inDouble) {
+        cleanWithoutComment += ch;
+        if (ch === '(' || ch === '[' || ch === '{') {
+          bracketDepth++;
+        } else if (ch === ')' || ch === ']' || ch === '}') {
+          if (bracketDepth > 0) bracketDepth--;
+        }
+      }
+    }
+
+    if (!signatureEnded) {
+      if (bracketDepth <= 0 && cleanWithoutComment.trim().endsWith(':')) {
+        signatureEnded = true;
+      }
+      lastValidLine = i + 1;
+    } else if (trimmed && !trimmed.startsWith('#')) {
+      lastValidLine = i + 1;
+    }
   }
 
   return lastValidLine;
@@ -268,6 +365,19 @@ export function parseFileSymbols(filePath: string, content: string): CodeSymbol[
     default:
       return parseGenericCStyle(lines);
   }
+}
+
+/**
+ * Checks whether a `const Name = ...` declaration starting at `lineIdx` is an arrow function
+ * (supporting multi-line destructured parameter lists like `export const Comp = ({\n a,\n}: Props) => {`).
+ */
+function isArrowFunctionDeclaration(lines: string[], startIdx: number): boolean {
+  const windowLines = lines.slice(startIdx, Math.min(lines.length, startIdx + 15));
+  const joined = windowLines.join(' ');
+  // Must have `=` followed by optional `async`, either `( ... )` or identifier, optional `: ReturnType`, and `=>`
+  return /^(?:export\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([\s\S]*?\)|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=>/.test(
+    joined.trim()
+  );
 }
 
 function parseTsJs(lines: string[]): CodeSymbol[] {
@@ -356,7 +466,7 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
       continue;
     }
 
-    // 5. Standard function declaration
+    // 5. Standard function declaration (single-line or multi-line destructured params)
     const fnMatch = trimmed.match(
       /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/
     );
@@ -371,48 +481,52 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
       continue;
     }
 
-    // 6. Arrow function or exported const handler
-    const arrowMatch = trimmed.match(
-      /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=>/
+    // 6. Arrow function or React component (`const Comp = ({ a, b }: Props) => { ... }`)
+    const varDeclMatch = trimmed.match(
+      /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/
     );
-    if (arrowMatch) {
-      symbols.push({
-        name: arrowMatch[1],
-        kind: 'func',
-        lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i, false),
-        exported: isExported,
-      });
-      continue;
+    if (varDeclMatch && (raw.length - raw.trimStart().length === 0 || isExported)) {
+      if (isArrowFunctionDeclaration(lines, i)) {
+        symbols.push({
+          name: varDeclMatch[1],
+          kind: 'func',
+          lineStart: i + 1,
+          lineEnd: findBraceBlockEnd(lines, i, false),
+          exported: isExported,
+        });
+        continue;
+      }
+
+      if (isExported) {
+        symbols.push({
+          name: varDeclMatch[1],
+          kind: 'const',
+          lineStart: i + 1,
+          lineEnd: findBraceBlockEnd(lines, i, false),
+          exported: true,
+        });
+        continue;
+      }
     }
 
-    // 7. Exported constant
-    const exportConstMatch = trimmed.match(/^export\s+const\s+([A-Za-z_$][\w$]*)\b/);
-    if (exportConstMatch) {
-      symbols.push({
-        name: exportConstMatch[1],
-        kind: 'const',
-        lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i, false),
-        exported: true,
-      });
-      continue;
-    }
-
-    // 8. Class method or getter/setter (including private `#method`)
+    // 7. Class method or getter/setter (supports destructured params `{ a, b }: Props` & multi-line signatures)
     const indent = raw.length - raw.trimStart().length;
     if (indent >= 2 && indent <= 8) {
       const methodMatch = trimmed.match(
-        /^(?:public\s+|private\s+|protected\s+)?(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(#?[A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\([^;]*\)\s*(?::\s*[^{]+)?\{/
+        /^(?:public\s+|private\s+|protected\s+|readonly\s+|override\s+)*(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(#?[A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(/
       );
-      if (methodMatch && !reservedNames.has(methodMatch[1])) {
-        symbols.push({
-          name: methodMatch[1],
-          kind: 'method',
-          lineStart: i + 1,
-          lineEnd: findBraceBlockEnd(lines, i, false),
-          exported: false,
-        });
+      if (methodMatch && !reservedNames.has(methodMatch[1]) && !trimmed.endsWith(';')) {
+        // Verify this looks like a method definition (has `{` at the end of its signature line or within the next few lines)
+        const sigWindow = lines.slice(i, Math.min(lines.length, i + 10)).join(' ');
+        if (/^\s*(?:public|private|protected|readonly|override|static|async|get|set|\s)*#?[A-Za-z_$][\w$]*\s*(?:<[^>]*>)?\s*\([\s\S]*?\)\s*(?::[^{;]+)?\{/.test(sigWindow)) {
+          symbols.push({
+            name: methodMatch[1],
+            kind: 'method',
+            lineStart: i + 1,
+            lineEnd: findBraceBlockEnd(lines, i, false),
+            exported: false,
+          });
+        }
       }
     }
   }

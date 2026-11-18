@@ -97,12 +97,12 @@ function writeIgnoreOrCommandFileSafe(filePath, content, force) {
 /**
  * Non-destructively merges official Claude Code `permissions.deny` rules into `.claude/settings.json`.
  */
-function upsertClaudeSettingsJson(settingsPath, stacks) {
+function upsertClaudeSettingsJson(settingsPath, stacks, isGlobal = false) {
     const dir = path.dirname(settingsPath);
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
-    const denyRulesToAdd = (0, templates_1.getClaudeSettingsDenyRules)(stacks);
+    const denyRulesToAdd = (0, templates_1.getClaudeSettingsDenyRules)(stacks, isGlobal);
     let existed = false;
     let settingsObj = {};
     if (fs.existsSync(settingsPath)) {
@@ -114,12 +114,12 @@ function upsertClaudeSettingsJson(settingsPath, stacks) {
                 settingsObj = parsed;
             }
             else {
-                return 'skipped';
+                return 'invalid-json';
             }
         }
         catch {
-            // If user has malformed JSON, don't touch it
-            return 'skipped';
+            // If user has JSONC comments or malformed JSON, don't touch it
+            return 'invalid-json';
         }
     }
     if (!settingsObj.permissions || typeof settingsObj.permissions !== 'object' || Array.isArray(settingsObj.permissions)) {
@@ -180,13 +180,13 @@ function runInitCommand(options) {
     }
     // 2. Configure official Claude Code `.claude/settings.json` (`permissions.deny`)
     const claudeSettingsPath = path.join(cwd, '.claude', 'settings.json');
-    const settingsStatus = upsertClaudeSettingsJson(claudeSettingsPath, stacks);
+    const settingsStatus = upsertClaudeSettingsJson(claudeSettingsPath, stacks, false);
     if (!options.quiet) {
-        logFileStatus('.claude/settings.json', settingsStatus, 'Official Claude Code permissions.deny rules for lockfiles & build bloat');
+        logFileStatus('.claude/settings.json', settingsStatus, 'Official Claude Code permissions.deny rules for lockfiles & caches');
     }
-    // 3. Generate .antigravityignore, .aiignore, and .claudeignore
+    // 3. Generate .antigravityignore and .aiignore (Note: .claudeignore is not generated because Claude Code uses .claude/settings.json)
     const ignoreContent = (0, ignore_1.generateIgnoreContent)(stacks);
-    const ignoreTargets = ['.antigravityignore', '.aiignore', '.claudeignore'];
+    const ignoreTargets = ['.antigravityignore', '.aiignore'];
     for (const target of ignoreTargets) {
         const fullPath = path.join(cwd, target);
         const status = writeIgnoreOrCommandFileSafe(fullPath, ignoreContent, options.force);
@@ -247,6 +247,9 @@ function logFileStatus(relPath, status, desc) {
     else if (status === 'appended') {
         ui_1.log.success(`Appended to ${ui_1.c.bold(ui_1.c.brightCyan(relPath))} ${ui_1.c.gray('— Existing user rules preserved untouched')}`);
     }
+    else if (status === 'invalid-json') {
+        ui_1.log.warn(`Skipped ${ui_1.c.bold(relPath)} ${ui_1.c.gray('(contains comments or non-standard JSON; preserved untouched)')}`);
+    }
     else {
         ui_1.log.warn(`Skipped ${ui_1.c.bold(relPath)} ${ui_1.c.gray('(already exists; pass --force to overwrite)')}`);
     }
@@ -258,11 +261,11 @@ function runGlobalInit(options) {
         ui_1.log.step('Configuring ctx-slim GLOBALLY (non-destructive) in', homeDir);
         console.log('');
     }
-    // 1. Global Claude Code settings.json (`~/.claude/settings.json`)
+    // 1. Global Claude Code settings.json (`~/.claude/settings.json`) — Lockfiles only!
     const globalSettingsPath = path.join(homeDir, '.claude', 'settings.json');
-    const settingsStatus = upsertClaudeSettingsJson(globalSettingsPath, []);
+    const settingsStatus = upsertClaudeSettingsJson(globalSettingsPath, [], true);
     if (!options.quiet) {
-        logFileStatus('~/.claude/settings.json', settingsStatus, 'Global permissions.deny rules for lockfiles & build artifacts');
+        logFileStatus('~/.claude/settings.json', settingsStatus, 'Global permissions.deny rules for lockfiles only');
     }
     // 2. Global Claude Code Rules (`~/.claude/CLAUDE.md`) — Non-destructive marker upsert!
     const globalClaudeMd = path.join(homeDir, '.claude', 'CLAUDE.md');
@@ -335,7 +338,32 @@ function installGitPostCommitHook(cwd, quiet) {
     catch {
         // Ignore chmod issues on Windows
     }
+    // Add REPO_MAP.md and CONTEXT_STATE.md to .git/info/exclude so post-commit hook
+    // never leaves a dirty working tree (`M REPO_MAP.md`) or causes merge conflicts
+    const infoDir = path.join(gitDir, 'info');
+    const excludePath = path.join(infoDir, 'exclude');
+    try {
+        if (!fs.existsSync(infoDir)) {
+            fs.mkdirSync(infoDir, { recursive: true });
+        }
+        const existingExclude = fs.existsSync(excludePath)
+            ? fs.readFileSync(excludePath, 'utf8')
+            : '';
+        if (!existingExclude.includes('# --- ctx-slim local context files ---')) {
+            const excludeBlock = [
+                '',
+                '# --- ctx-slim local context files ---',
+                'REPO_MAP.md',
+                'CONTEXT_STATE.md',
+                '',
+            ].join('\n');
+            fs.writeFileSync(excludePath, existingExclude.trimEnd() + '\n' + excludeBlock, 'utf8');
+        }
+    }
+    catch {
+        // Ignore .git/info/exclude errors
+    }
     if (!quiet) {
-        ui_1.log.success(`Installed Git Hook ${ui_1.c.bold(ui_1.c.brightCyan('.git/hooks/post-commit'))} ${ui_1.c.gray('— Safely updates REPO_MAP.md after each commit')}`);
+        ui_1.log.success(`Installed Git Hook ${ui_1.c.bold(ui_1.c.brightCyan('.git/hooks/post-commit'))} ${ui_1.c.gray('— Safely updates REPO_MAP.md & excludes it in .git/info/exclude')}`);
     }
 }

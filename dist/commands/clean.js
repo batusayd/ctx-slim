@@ -257,6 +257,19 @@ function runCleanCommand(options) {
                 // Ignore hook errors
             }
         }
+        const excludePath = path.join(cwd, '.git', 'info', 'exclude');
+        if (fs.existsSync(excludePath)) {
+            try {
+                const excludeContent = fs.readFileSync(excludePath, 'utf8');
+                if (excludeContent.includes('# --- ctx-slim local context files ---')) {
+                    const cleanedExclude = excludeContent.split('# --- ctx-slim local context files ---')[0].trimEnd() + '\n';
+                    fs.writeFileSync(excludePath, cleanedExclude, 'utf8');
+                }
+            }
+            catch {
+                // Ignore exclude errors
+            }
+        }
     }
     if (!options.quiet) {
         console.log('');

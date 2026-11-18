@@ -75,7 +75,15 @@ Task: $ARGUMENTS
  * Generates official Claude Code `.claude/settings.json` `permissions.deny` rules
  * so Claude Code is prevented at the tool permission layer from reading lockfiles and build bloat.
  */
-export function getClaudeSettingsDenyRules(stacks: DetectedStack[]): string[] {
+/**
+ * Generates official Claude Code `.claude/settings.json` `permissions.deny` rules.
+ * In global mode (`isGlobal = true`), only blocks package manager lockfiles so project-specific
+ * `build/`, `dist/`, or `.map` debugging is never globally obstructed.
+ */
+export function getClaudeSettingsDenyRules(
+  stacks: DetectedStack[],
+  isGlobal: boolean = false
+): string[] {
   const rules = new Set<string>([
     'Read(package-lock.json)',
     'Read(pnpm-lock.yaml)',
@@ -86,18 +94,18 @@ export function getClaudeSettingsDenyRules(stacks: DetectedStack[]): string[] {
     'Read(poetry.lock)',
     'Read(Pipfile.lock)',
     'Read(uv.lock)',
-    'Read(go.sum)',
     'Read(composer.lock)',
     'Read(Gemfile.lock)',
-    'Read(dist/**)',
-    'Read(build/**)',
-    'Read(coverage/**)',
-    'Read(*.min.js)',
-    'Read(*.min.css)',
-    'Read(*.bundle.js)',
-    'Read(*.map)',
-    'Read(*.tsbuildinfo)',
   ]);
+
+  if (isGlobal) {
+    return Array.from(rules);
+  }
+
+  rules.add('Read(*.min.js)');
+  rules.add('Read(*.min.css)');
+  rules.add('Read(*.bundle.js)');
+  rules.add('Read(*.tsbuildinfo)');
 
   const stackIds = new Set<StackId>(stacks.map((s) => s.id));
   if (stackIds.has('node-ts') || stackIds.size === 0) {
@@ -111,12 +119,6 @@ export function getClaudeSettingsDenyRules(stacks: DetectedStack[]): string[] {
     rules.add('Read(.venv/**)');
     rules.add('Read(venv/**)');
     rules.add('Read(.pytest_cache/**)');
-  }
-  if (stackIds.has('rust') || stackIds.has('java-kotlin')) {
-    rules.add('Read(target/**)');
-  }
-  if (stackIds.has('php') || stackIds.has('go') || stackIds.has('ruby')) {
-    rules.add('Read(vendor/**)');
   }
 
   return Array.from(rules);

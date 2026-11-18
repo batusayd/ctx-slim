@@ -16,13 +16,13 @@ import { buildRepoMap } from './map';
 
 const MODEL_PRICING_LIST: ModelPricing[] = [
   {
-    name: 'Claude Opus 4.5 / 4',
+    name: 'Claude Opus 4.6 / 4.5',
     provider: 'Anthropic',
-    inputPerMillionUsd: 15.0,
-    cachedInputPerMillionUsd: 1.5,
+    inputPerMillionUsd: 5.0,
+    cachedInputPerMillionUsd: 0.5,
   },
   {
-    name: 'Claude Sonnet 4.5 / 4',
+    name: 'Claude Sonnet 4.6 / 4.5',
     provider: 'Anthropic',
     inputPerMillionUsd: 3.0,
     cachedInputPerMillionUsd: 0.3,
@@ -152,24 +152,24 @@ export function runStatsCommand(options: StatsOptions): void {
     Math.round(avgTargetedSliceLines * avgTokensPerLine)
   );
 
-  // Realistic Task Modeling:
-  // Baseline (No ctx-slim): Agent runs grep/glob and reads ~4 candidate files in full (or all files if repo < 4 files)
-  const candidateFilesPerTask = Math.min(totalFiles, 4);
+  // Realistic Task Modeling (Uncapped REPO_MAP.md token cost):
+  // Baseline (No ctx-slim): Agent runs grep/glob and reads ~3 candidate files in full (or all files if repo < 3 files)
+  const candidateFilesPerTask = Math.min(totalFiles, 3);
   const baselineTaskTokens = Math.min(rawSourceTokens, avgFileTokens * candidateFilesPerTask);
 
-  // With ctx-slim: Compact CLAUDE.md rule block (~155 tok) + REPO_MAP lookup + 2 targeted symbol range reads
+  // With ctx-slim: Compact CLAUDE.md rule block (~155 tok) + full REPO_MAP.md + 2 targeted symbol range reads
   const ruleOverheadTokens = 155;
   const targetedSlicesCount = Math.min(candidateFilesPerTask, 2);
-  const slimTaskTokens = Math.min(
-    baselineTaskTokens,
+  const slimTaskTokens =
     ruleOverheadTokens +
-      Math.min(mapResult.mapTokens, 1200) +
-      avgTargetedSliceTokens * targetedSlicesCount
-  );
+    mapResult.mapTokens +
+    avgTargetedSliceTokens * targetedSlicesCount;
 
   const savedPerTaskTokens = Math.max(0, baselineTaskTokens - slimTaskTokens);
   const savedPerTaskPct =
-    baselineTaskTokens > 0 ? (savedPerTaskTokens / baselineTaskTokens) * 100 : 0;
+    baselineTaskTokens > 0
+      ? ((baselineTaskTokens - slimTaskTokens) / baselineTaskTokens) * 100
+      : 0;
 
   const tasksPerSession = 15;
 
@@ -250,11 +250,13 @@ export function runStatsCommand(options: StatsOptions): void {
       'Standard agent exploration',
     ],
     [
-      `${c.bold(c.brightGreen('ctx-slim Task Read'))} ${c.gray('(Rule + Map + 2 symbol slices)')}`,
+      `${c.bold(c.brightGreen('ctx-slim Task Read'))} ${c.gray('(Rule + Full Map + 2 slices)')}`,
       `${targetedSlicesCount} slices`,
       `~${formatNumber(avgTargetedSliceLines * targetedSlicesCount)} lines`,
       c.bold(c.brightGreen(`${formatNumber(slimTaskTokens)} tok`)),
-      c.bold(c.brightGreen(`-${savedPerTaskPct.toFixed(1)}% net input reduction`)),
+      savedPerTaskPct > 0
+        ? c.bold(c.brightGreen(`-${savedPerTaskPct.toFixed(1)}% vs ${candidateFilesPerTask}-file read`))
+        : c.yellow('Small repo: direct read/grep is cheaper than map'),
     ],
   ];
 
@@ -309,7 +311,7 @@ export function runStatsCommand(options: StatsOptions): void {
 
   console.log('');
   console.log(
-    `  ${c.cyan('ℹ')} ${c.bold('Methodology')}: Token counts use lexical BPE approximation. Task comparison models reading ${candidateFilesPerTask} candidate files in full (${formatNumber(baselineTaskTokens)} tok) vs ${c.brightCyan('ctx-slim')} rule overhead (${ruleOverheadTokens} tok) + map lookup + ${targetedSlicesCount} empirical symbol slices (${avgSymbolLines}L + ±15L buffer = ${formatNumber(avgTargetedSliceTokens)} tok/slice).`
+    `  ${c.cyan('ℹ')} ${c.bold('Methodology (Heuristic Estimate, Not Live Telemetry)')}: Token counts use lexical BPE approximation. Compares reading ${candidateFilesPerTask} full files (${formatNumber(baselineTaskTokens)} tok) vs ${c.brightCyan('ctx-slim')} rule overhead (${ruleOverheadTokens} tok) + uncapped REPO_MAP.md (${formatNumber(mapResult.mapTokens)} tok) + ${targetedSlicesCount} symbol slices (${avgSymbolLines}L + ±15L buffer = ${formatNumber(avgTargetedSliceTokens)} tok/slice).`
   );
   console.log('');
 }

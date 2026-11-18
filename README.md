@@ -14,8 +14,8 @@
 
 <br />
 
-**Reduce redundant full-file reads, prevent accidental lockfile/bundle ingestion, and keep AI coding sessions lean.**  
-**ContextSlim (`ctx-slim`)** indexes your repository's symbols with exact `[Lstart-Lend]` line numbers, configures official Claude Code `permissions.deny` rules, and provides structured `/clear` handoffs—typically reducing per-task context reads by **30% to 65%**.
+**Reduce redundant full-file reads, prevent accidental lockfile ingestion, and structure `/clear` session handoffs.**  
+**ContextSlim (`ctx-slim`)** indexes your repository's symbols with exact `[Lstart-Lend]` line numbers, configures official Claude Code `.claude/settings.json` (`permissions.deny`) rules, and generates compact session handoff snapshots.
 
 ```bash
 git clone https://github.com/batusayd/ctx-slim.git
@@ -53,7 +53,11 @@ AI coding agents (**Claude Code**, **Google Antigravity**, **Cursor**) already u
   - If `CLAUDE.md` already exists, `ctx-slim` appends a bounded `<!-- ctx-slim:start --> ... <!-- ctx-slim:end -->` block at the bottom (and updates only that block on subsequent runs).
   - Running `ctx-slim clean` strips **only** the bounded `ctx-slim` block, leaving 100% of your custom rules intact.
 - **Official `.claude/settings.json` (`permissions.deny`) Integration**:
-  - Non-destructively merges `Read(package-lock.json)`, `Read(dist/**)`, `Read(*.min.js)`, etc. into `.claude/settings.json` so Claude Code blocks bloat at the official tool-permission layer.
+  - Note that **Claude Code does not support `.claudeignore`** (so `ctx-slim` does not generate `.claudeignore`). Instead, `ctx-slim` non-destructively merges `Read(package-lock.json)`, `Read(pnpm-lock.yaml)`, `Read(Cargo.lock)`, etc. into `.claude/settings.json` `permissions.deny`.
+  - In `--global` mode (`~/.claude/settings.json`), only package manager lockfiles are added to `permissions.deny`—never `build/**`, `dist/**`, `*.map`, or `go.sum`—so you can always debug build outputs across your projects. *(Note: `Read(...)` deny rules apply to Claude Code's `Read` tool, not shell commands like `cat`).*
+- **Clean Git Working Tree (`REPO_MAP.md` Determinism & `.git/info/exclude`)**:
+  - `REPO_MAP.md` is 100% deterministic (no volatile timestamps) and is only written to disk when symbols or line ranges actually change.
+  - When `--with-hooks` is used, `REPO_MAP.md` and `CONTEXT_STATE.md` are automatically added to `.git/info/exclude` so the `post-commit` hook never leaves a dirty `M REPO_MAP.md` in `git status` or causes merge conflicts.
 - **Zero Supply-Chain Risk in Prompts**:
   - Generated `CLAUDE.md` rules and `.claude/commands/*.md` slash commands **never** instruct the AI agent to run `npx --yes` or fetch unpinned remote code from GitHub or npm.
 - **Ultra-Compact Rule Overhead (~150 Tokens)**:
@@ -99,26 +103,19 @@ AI coding agents (**Claude Code**, **Google Antigravity**, **Cursor**) already u
 
 ---
 
-## 📊 Methodology & Realistic Token Benchmarks
+## 📊 Methodology & When `ctx-slim` Helps (vs. When It Doesn't)
 
-Unlike tools that assume an AI agent reads 100% of your entire repository on every single prompt, **`ctx-slim stats` uses an empirical, scenario-based model**:
+**`ctx-slim stats` is a static heuristic estimator, not live session telemetry.** It inspects your repository's files and parsed symbol spans to help you evaluate whether `REPO_MAP.md` is net-positive for your codebase:
 
-1. **Lexical BPE-Approximation Tokenizer**: Splits identifiers, camelCase/snake_case subwords, numbers, and punctuation operators to approximate `cl100k_base` / Claude token counts on source code.
+1. **Lexical BPE-Approximation Tokenizer**: Splits identifiers, camelCase/snake_case subwords, numbers, and punctuation operators to approximate code token counts.
 2. **Empirical Symbol Span Calculation**: Measures the actual average line length of every parsed function/class/method in your repository (`avgSymbolLines`) plus a **±15 line safety buffer** (`+30 lines`).
-3. **Realistic Per-Task Comparison**:
-   - **Baseline Task (Without `ctx-slim`)**: Agent uses `grep`/`glob` and reads **4 candidate source files** in full.
-   - **With `ctx-slim`**: Includes the **155-token rule overhead**, a `REPO_MAP.md` lookup, and reading **2 targeted `[Lstart-Lend]` symbol slices** (±15 lines).
+3. **Uncapped `REPO_MAP.md` Cost**:
+   - Compares reading **3 average candidate files in full** against the **155-token rule overhead + the full uncapped `REPO_MAP.md` token count + 2 targeted `[Lstart-Lend]` symbol slices**.
+   - **Small Repositories (<15–20 small files)**: Loading `REPO_MAP.md` plus rule overhead often costs as many tokens as reading the files directly via `Grep` + `Read(offset, limit)`. `ctx-slim stats` will explicitly report: `Small repo: direct read/grep is cheaper than map`.
+   - **Medium-to-Large Repositories (with 300–1,000+ line files)**: When individual source files are significantly larger than `REPO_MAP.md` + a 40-line symbol slice, targeted `[Lstart-Lend]` reads reduce the lines loaded into context per task.
+   - **Long Sessions (`/handoff` + `/clear`)**: Summarizing session state into `CONTEXT_STATE.md` (~800 tokens) before running `/clear` avoids replaying 15+ turns of accumulated conversation history.
 
-### Typical Savings by Scenario
-
-| Scenario | Baseline Behavior | With `ctx-slim` | Realistic Net Savings |
-| :--- | :--- | :--- | :--- |
-| **Tiny Single-File Edit** *(1 small file <100L)* | Reads 1 small file (~600 tok) | Rule overhead (~155 tok) + slice | **~0% to 10%** *(Map not needed)* |
-| **Multi-File Feature / Bugfix** *(4 files, ~300L each)* | Reads 4 full files (~9,500 tok) | Rule + Map + 2 symbol slices (~3,400 tok) | **~45% to 65% Input Saved** |
-| **Avoiding Accidental Lock/Bundle Read** | Reads lockfile/bundle (+25k–100k tok) | Blocked via `.claude/settings.json` `deny` | **75% to 90%+ Spike Prevented** |
-| **15-Turn Session Handoff (`/handoff` + `/clear`)** | Replays 15 turns of history every prompt | Resumes from ~850-tok `CONTEXT_STATE.md` | **50% to 70% Session History Saved** |
-
-*(Note: Both standard uncached input pricing and **Prompt-Cached** input pricing are reported by `ctx-slim stats`.)*
+*(Note: Both standard uncached input pricing and **Prompt-Cached** input pricing for Claude Opus 4.6/4.5, Claude Sonnet 4.6/4.5, Gemini 2.5 Pro, and GPT-4.1 are reported by `ctx-slim stats`.)*
 
 ---
 

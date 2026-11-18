@@ -64,6 +64,7 @@ export interface InitOptions {
   cwd: string;
   withHooks: boolean;
   force: boolean;
+  global?: boolean;
   quiet?: boolean;
 }
 
@@ -89,6 +90,7 @@ export interface StatsOptions {
 export interface CleanOptions {
   cwd: string;
   force?: boolean;
+  global?: boolean;
   quiet?: boolean;
 }
 

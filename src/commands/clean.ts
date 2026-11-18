@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { CleanOptions } from '../types';
 import { c, log, printBanner } from '../utils/ui';
@@ -30,22 +31,38 @@ function removeDirIfEmpty(dirPath: string): void {
 }
 
 export function runCleanCommand(options: CleanOptions): void {
-  const cwd = path.resolve(options.cwd);
+  const cwd = options.global ? os.homedir() : path.resolve(options.cwd);
 
   if (!options.quiet) {
     printBanner();
-    log.step('Removing ctx-slim generated files and hooks from', cwd);
+    log.step(
+      options.global
+        ? 'Removing GLOBAL ctx-slim rules and commands from'
+        : 'Removing ctx-slim generated files and hooks from',
+      cwd
+    );
     console.log('');
   }
 
   let removedCount = 0;
 
-  for (const relPath of GENERATED_FILES) {
+  const targetFiles = options.global
+    ? [
+        '.claude/CLAUDE.md',
+        '.antigravity/rules.md',
+        '.claude/commands/diff.md',
+        '.claude/commands/plan-lite.md',
+        '.claude/commands/handoff.md',
+        '.claude/commands/slim.md',
+      ]
+    : GENERATED_FILES;
+
+  for (const relPath of targetFiles) {
     const fullPath = path.join(cwd, relPath);
     if (!fs.existsSync(fullPath)) continue;
 
     // For CLAUDE.md, verify it was created by ctx-slim unless --force is passed
-    if (relPath === 'CLAUDE.md' && !options.force) {
+    if ((relPath === 'CLAUDE.md' || relPath === '.claude/CLAUDE.md') && !options.force) {
       try {
         const content = fs.readFileSync(fullPath, 'utf8');
         if (!content.includes('ctx-slim')) {

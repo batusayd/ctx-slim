@@ -76,6 +76,7 @@ function printHelp(): void {
     ${c.brightCyan('clean')}      Remove all ctx-slim generated files, rules & Git hooks from the project (alias: ${c.white('uninstall')})
 
   ${c.bold('OPTIONS')}
+    ${c.yellow('--global, -g')}        Install/remove rules globally in ${c.white('~/.claude/')} & ${c.white('~/.antigravity/')} for ALL projects
     ${c.yellow('--with-hooks')}        Install ${c.white('.git/hooks/post-commit')} to auto-update REPO_MAP.md (${c.cyan('init')})
     ${c.yellow('--force, -f')}         Overwrite existing configuration files (${c.cyan('init')})
     ${c.yellow('--output, -o <file>')} Custom output path for ${c.cyan('map')} or ${c.cyan('handoff')}
@@ -125,6 +126,7 @@ function main(): void {
           cwd: targetDir,
           withHooks: Boolean(flags['with-hooks'] || flags.hooks),
           force: Boolean(flags.force || flags.f),
+          global: Boolean(flags.global || flags.g),
           quiet,
         });
         break;
@@ -179,6 +181,7 @@ function main(): void {
         runCleanCommand({
           cwd: targetDir,
           force: Boolean(flags.force || flags.f),
+          global: Boolean(flags.global || flags.g),
           quiet,
         });
         break;

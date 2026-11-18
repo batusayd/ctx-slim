@@ -15,10 +15,10 @@
 <br />
 
 **Stop burning 50,000+ tokens per prompt on full-file reads, lockfiles, and verbose AI chatter.**  
-Integrate **ContextSlim (`ctx-slim`)** into any codebase with a single command and reduce AI token consumption & API costs by **75% to 92%**.
+Activate **ContextSlim (`ctx-slim`)** globally across all your projects with a single command and reduce AI token consumption & API costs by **75% to 92%**.
 
 ```bash
-npx ctx-slim init --with-hooks
+npx github:batusayd/ctx-slim init --global
 ```
 
 [Why ContextSlim?](#-why-contextslim-ctx-slim) •
@@ -119,49 +119,34 @@ When working with modern AI coding assistants (**Claude Code**, **Google Antigra
 
 ## 📦 Installation & Activation Guide
 
-**Prerequisites**: [Node.js](https://nodejs.org/) `>= 18.0.0` and `git` (optional, for automatic post-commit hooks).
+**Prerequisites**: [Node.js](https://nodejs.org/) `>= 18.0.0`.
 
-You can install and activate **ContextSlim (`ctx-slim`)** in three ways:
-
-### Option 1: Run Directly from GitHub with `npx` (Zero Installation)
-Navigate to **your own project directory** and run:
+### Option 1: Activate Globally for ALL Projects (1 Command — Recommended)
+Run this single command from **any terminal window**. It installs the optimization rules and slash commands (`/diff`, `/plan-lite`, `/handoff`, `/slim`) directly into your global `~/.claude/` and `~/.antigravity/` user directories so it automatically applies to **every project on your computer**:
 
 ```bash
-cd /path/to/your-project
-npx github:batusayd/ctx-slim init --with-hooks
+npx github:batusayd/ctx-slim init --global
 ```
 
-### Option 2: Clone from GitHub & Link Globally (Recommended for Local Use)
-Clone this repository once, build it, and link it globally on your machine so `ctx-slim` works in any terminal folder:
+### Option 2: Clone from GitHub & Link Globally on Your PC
+If you want the `ctx-slim` CLI permanently installed on your computer so you can run `ctx-slim map`, `ctx-slim stats`, or `ctx-slim handoff` anytime without `npx`:
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/batusayd/ctx-slim.git
 cd ctx-slim
-
-# 2. Install TypeScript compiler & build the CLI
 npm install
 npm run build
-
-# 3. Register `ctx-slim` (and `context-slim`) globally on your machine
 npm link
+
+# Activate rules globally across all projects on your PC:
+ctx-slim init --global
 ```
 
-Now navigate to **any project** on your computer and activate it with a single command:
+### Option 3: Per-Project Initialization (With Automatic Git Hooks)
+If you want to generate stack-specific `.claudeignore` / `.antigravityignore` files, `REPO_MAP.md`, and a `.git/hooks/post-commit` auto-updater inside a specific repository, run this inside that project's folder:
 
 ```bash
-cd /path/to/your-project
-ctx-slim init --with-hooks
-```
-
-### Option 3: Install via NPM (Once Published)
-
-```bash
-# Run without installing:
-npx ctx-slim init --with-hooks
-
-# Or install globally:
-npm install -g ctx-slim
+npx github:batusayd/ctx-slim init --with-hooks
 ```
 
 ---
@@ -200,11 +185,12 @@ If you use the standalone **Claude Desktop** chat app instead of Claude Code CLI
 ## 🛠️ CLI Commands Reference
 
 ### `ctx-slim init`
-Auto-detects your project's tech stack and bootstraps all ignore rules, agent rulebooks, slash commands, and the initial `REPO_MAP.md`.
+Auto-detects your project's tech stack and bootstraps ignore rules, agent rulebooks, slash commands, and `REPO_MAP.md` (or installs globally across all projects when `--global` is passed).
 
 ```bash
-ctx-slim init [--with-hooks] [--force] [--dir <path>]
+ctx-slim init [--global | -g] [--with-hooks] [--force] [--dir <path>]
 ```
+- `--global, -g`: Installs rules and slash commands into `~/.claude/` and `~/.antigravity/` so they apply across **all projects on your computer**.
 - `--with-hooks`: Installs `.git/hooks/post-commit` to keep `REPO_MAP.md` automatically synced after every commit.
 - `--force, -f`: Overwrite existing configuration files even if customized.
 
@@ -307,13 +293,15 @@ Inside **Claude Code** or **Google Antigravity**, type any of these commands dur
 
 If you ever want to remove **ContextSlim (`ctx-slim`)** from a project or from your computer completely, you can do so cleanly in seconds:
 
-### 1. Remove from a Project with One Command (Recommended)
-Run the built-in `clean` (or `uninstall`) command inside your project directory:
+### 1. Remove with One Command (Recommended)
+To remove global rules (`~/.claude/` & `~/.antigravity/`) or project-level files:
 
 ```bash
-npx ctx-slim clean
-# or if linked globally:
-ctx-slim uninstall
+# Remove global rules from your computer:
+npx github:batusayd/ctx-slim clean --global
+
+# Remove from a specific project directory:
+npx github:batusayd/ctx-slim clean
 ```
 
 This automatically deletes:

@@ -15,6 +15,7 @@ export function generateClaudeMd(projectName: string, stacks: DetectedStack[]): 
 ## 1. MANDATORY: REPO_MAP-First Navigation (Never Read Full Files Blindly)
 
 1. **Always check \`REPO_MAP.md\` first** before opening or reading any source file.
+   - If \`REPO_MAP.md\` does not exist in the current project root yet, run \`ctx-slim map --quiet\` (or \`npx --yes github:batusayd/ctx-slim map --quiet\`) once to generate it automatically.
 2. \`REPO_MAP.md\` contains the complete directory tree and every function, class, interface, struct, and export with **exact line ranges** (\`[Lstart-Lend]\`).
 3. **Targeted Line-Range Reads Only**:
    - Once you locate the target symbol in \`REPO_MAP.md\` (e.g., \`parseFileSymbols [L142-L168]\`), read **only** that specific line range (plus ±10 lines of context if needed).
@@ -94,6 +95,7 @@ description: ctx-slim AI Token Optimization & Context Management Rules for ${pro
 ## 1. REPO_MAP-First File Reading Protocol (Critical Token Saver)
 
 - **Always inspect \`REPO_MAP.md\` first** before calling \`read_file\` on source files.
+- If \`REPO_MAP.md\` does not exist in the workspace root yet, run \`ctx-slim map --quiet\` (or \`npx --yes github:batusayd/ctx-slim map --quiet\`) once to index the repository.
 - \`REPO_MAP.md\` indexes every file, class, interface, and function with **exact \`[Lstart-Lend]\` line numbers**.
 - When calling \`read_file\`, **always pass \`StartLine\` and \`EndLine\`** matching the symbol range from \`REPO_MAP.md\` instead of reading entire files from line 1 to EOF.
 - If \`CONTEXT_STATE.md\` exists in the workspace root, read it at the start of a new conversation to restore architectural context and active tasks immediately.

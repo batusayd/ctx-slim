@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { InitOptions } from '../types';
 import { detectStacks } from '../utils/detector';
@@ -35,6 +36,11 @@ function writeFileSafe(filePath: string, content: string, force: boolean): 'crea
 }
 
 export function runInitCommand(options: InitOptions): void {
+  if (options.global) {
+    runGlobalInit(options);
+    return;
+  }
+
   const cwd = path.resolve(options.cwd);
   const projectName = path.basename(cwd);
 
@@ -150,6 +156,69 @@ function logFileStatus(
     log.warn(
       `Skipped ${c.bold(relPath)} ${c.gray('(already exists; pass --force to overwrite)')}`
     );
+  }
+}
+
+function runGlobalInit(options: InitOptions): void {
+  const homeDir = os.homedir();
+
+  if (!options.quiet) {
+    printBanner();
+    log.step('Activating ctx-slim GLOBALLY for all projects in', homeDir);
+    console.log('');
+  }
+
+  // 1. Global Claude Code Rules (~/.claude/CLAUDE.md)
+  const globalClaudeMd = path.join(homeDir, '.claude', 'CLAUDE.md');
+  const claudeStatus = writeFileSafe(
+    globalClaudeMd,
+    generateClaudeMd('All Projects (Global Profile)', []),
+    options.force
+  );
+  if (!options.quiet) {
+    logFileStatus(
+      '~/.claude/CLAUDE.md',
+      claudeStatus,
+      'Global Claude Code rules (active across all projects)'
+    );
+  }
+
+  // 2. Global Claude Code Slash Commands (~/.claude/commands/*.md)
+  const slashCommands = generateClaudeSlashCommands();
+  for (const [fileName, cmdContent] of Object.entries(slashCommands)) {
+    const cmdPath = path.join(homeDir, '.claude', 'commands', fileName);
+    writeFileSafe(cmdPath, cmdContent, options.force);
+  }
+  if (!options.quiet) {
+    log.success(
+      `Installed Global Slash Commands in ${c.bold(c.brightCyan('~/.claude/commands/'))}: ${c.brightCyan('/diff')}, ${c.brightCyan('/plan-lite')}, ${c.brightCyan('/handoff')}, ${c.brightCyan('/slim')}`
+    );
+  }
+
+  // 3. Global Antigravity Rules (~/.antigravity/rules.md)
+  const globalAgRules = path.join(homeDir, '.antigravity', 'rules.md');
+  const agStatus = writeFileSafe(
+    globalAgRules,
+    generateAntigravityRulesMd('All Projects (Global Profile)', []),
+    options.force
+  );
+  if (!options.quiet) {
+    logFileStatus(
+      '~/.antigravity/rules.md',
+      agStatus,
+      'Global Antigravity rules (active across all workspaces)'
+    );
+  }
+
+  if (!options.quiet) {
+    console.log('');
+    console.log(
+      `  ${c.bgGreen(c.bold(' GLOBAL READY '))} ${c.bold('ContextSlim is now active across ALL projects on your computer!')}`
+    );
+    console.log(
+      `  ${c.gray('Tip: You can also run')} ${c.brightCyan('ctx-slim init --with-hooks')} ${c.gray('inside any specific repo to add Git post-commit hooks.')}`
+    );
+    console.log('');
   }
 }
 

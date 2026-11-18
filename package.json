@@ -1,0 +1,57 @@
+{
+  "name": "ctx-slim",
+  "version": "1.0.0",
+  "description": "ContextSlim (ctx-slim) — Zero-dependency AI Token Optimization & Context Management Engine for Claude Code, Antigravity, and AI Coding Agents.",
+  "keywords": [
+    "ai",
+    "llm",
+    "token-optimizer",
+    "context-slim",
+    "ctx-slim",
+    "context-management",
+    "claude-code",
+    "claude-desktop",
+    "antigravity",
+    "repo-map",
+    "cli",
+    "developer-tools",
+    "claudeignore",
+    "aiignore"
+  ],
+  "homepage": "https://github.com/yourusername/ctx-slim#readme",
+  "bugs": {
+    "url": "https://github.com/yourusername/ctx-slim/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/ctx-slim.git"
+  },
+  "license": "MIT",
+  "author": "",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "ctx-slim": "./dist/index.js",
+    "context-slim": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build",
+    "test:self": "npm run build && node dist/index.js init --with-hooks && node dist/index.js map && node dist/index.js handoff && node dist/index.js stats"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}

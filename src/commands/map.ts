@@ -8,7 +8,14 @@ import {
   isTextSourceFile,
   parseFileSymbols,
 } from '../utils/parser';
-import { c, estimateTokens, formatBytes, formatNumber, log, printBanner } from '../utils/ui';
+import {
+  c,
+  estimateTokensFromText,
+  formatBytes,
+  formatNumber,
+  log,
+  printBanner,
+} from '../utils/ui';
 
 const MAX_FILE_SIZE_BYTES = 512 * 1024; // 512 KB cap for single source file parsing
 
@@ -78,7 +85,7 @@ export function buildRepoMap(options: MapOptions): RepoMapResult {
     if (content.includes('\0')) return;
 
     const lineCount = content.split(/\r?\n/).length;
-    const estimatedFileTokens = estimateTokens(content.length);
+    const estimatedFileTokens = estimateTokensFromText(content);
     const language = getLanguageForFile(relPath);
     const symbols = isParsableSourceFile(relPath) ? parseFileSymbols(relPath, content) : [];
 
@@ -127,7 +134,9 @@ export function buildRepoMap(options: MapOptions): RepoMapResult {
     '',
   ].join('\n');
 
-  const mapTokens = estimateTokens(headerLines.join('\n').length + preliminaryBody.length + 250);
+  const mapTokens = estimateTokensFromText(
+    headerLines.join('\n') + '\n' + preliminaryBody + ' '.repeat(250)
+  );
   const savingsPercent =
     rawCodeTokens > 0
       ? Math.max(0, Math.min(99.9, ((rawCodeTokens - mapTokens) / rawCodeTokens) * 100))
@@ -269,10 +278,54 @@ export function runMapCommand(options: MapOptions): RepoMapResult {
       `    ${c.gray('├─')} Raw Code Tokens : ${c.yellow('~' + formatNumber(result.rawCodeTokens))} tokens`
     );
     console.log(
-      `    ${c.gray('└─')} Map Token Size  : ${c.brightGreen('~' + formatNumber(result.mapTokens))} tokens (${c.bold(c.brightGreen(result.savingsPercent.toFixed(1) + '% footprint reduction'))})`
+      `    ${c.gray('└─')} Map Token Size  : ${c.brightGreen('~' + formatNumber(result.mapTokens))} tokens (${c.bold(c.brightGreen(result.savingsPercent.toFixed(1) + '% smaller than full source'))})`
     );
     console.log('');
   }
 
+  if (options.watch) {
+    startMapWatcher(options, outPath);
+  }
+
   return result;
+}
+
+function startMapWatcher(options: MapOptions, outPath: string): void {
+  const cwd = path.resolve(options.cwd);
+  const matcher = new IgnoreMatcher(cwd);
+  const outRel = path.relative(cwd, outPath).replace(/\\/g, '/');
+
+  log.info(
+    `Watching ${c.brightCyan(cwd)} for file edits to keep ${c.bold(outRel)} live-updated... ${c.gray('(Press Ctrl+C to stop)')}`
+  );
+
+  let timer: NodeJS.Timeout | null = null;
+
+  try {
+    fs.watch(cwd, { recursive: true }, (_eventType, filename) => {
+      if (!filename) return;
+      const rel = filename.replace(/\\/g, '/');
+      if (rel === outRel || rel === 'REPO_MAP.md' || rel === 'CONTEXT_STATE.md') return;
+      if (matcher.isIgnored(rel, false) || !isTextSourceFile(rel)) return;
+
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        try {
+          const updated = buildRepoMap(options);
+          fs.writeFileSync(outPath, updated.markdown, 'utf8');
+          if (!options.quiet) {
+            const timeStr = new Date().toLocaleTimeString();
+            log.success(
+              `${c.gray(`[${timeStr}]`)} Refreshed ${c.brightCyan(outRel)} after change in ${c.white(rel)} (${updated.totalSymbols} symbols)`
+            );
+          }
+        } catch {
+          // Ignore transient write errors
+        }
+      }, 150);
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`Recursive watch not supported on this platform/directory: ${msg}`);
+  }
 }

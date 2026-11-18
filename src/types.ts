@@ -72,6 +72,7 @@ export interface MapOptions {
   cwd: string;
   output: string;
   maxDepth?: number;
+  watch?: boolean;
   quiet?: boolean;
 }
 

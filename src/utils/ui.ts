@@ -67,7 +67,21 @@ export function formatUsd(amount: number): string {
 }
 
 export function estimateTokens(charCount: number): number {
-  return Math.ceil(charCount / 4);
+  return Math.ceil(charCount / 3.8);
+}
+
+/**
+ * Lexical BPE-like token estimator for source code and markdown.
+ * Splits identifiers, camelCase/snake_case subwords, numbers, and punctuation operators,
+ * closely approximating cl100k_base / Claude tokenizer counts on code.
+ */
+export function estimateTokensFromText(text: string): number {
+  if (!text) return 0;
+  const tokens = text.match(
+    /[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+|[^\sA-Za-z0-9]|\r?\n/g
+  );
+  if (!tokens) return Math.ceil(text.length / 4);
+  return Math.max(1, Math.round(tokens.length * 0.85));
 }
 
 export function printBanner(): void {

@@ -57,22 +57,35 @@ export function isParsableSourceFile(filePath: string): boolean {
 
 export function isTextSourceFile(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
-  return ext in LANGUAGE_BY_EXT || ['.sql', '.graphql', '.prisma', '.sh', '.ps1', '.css', '.scss', '.html', '.vue', '.svelte'].includes(ext);
+  return (
+    ext in LANGUAGE_BY_EXT ||
+    ['.sql', '.graphql', '.prisma', '.sh', '.ps1', '.css', '.scss', '.html', '.vue', '.svelte'].includes(ext)
+  );
+}
+
+interface ScanState {
+  inBacktick: boolean;
+  inBlockComment: boolean;
 }
 
 /**
  * Finds the closing line (1-based) of a brace-delimited block starting at `startLineIdx` (0-based).
+ * Scans the entire file without artificial line limits, tracking strings, regexes, template literals,
+ * and multi-line block comments. Does NOT treat `#` as a comment in TS/JS/Go/Rust/C#/Java (preserving `#private` fields and `#[attr]`).
  */
-function findBraceBlockEnd(lines: string[], startLineIdx: number): number {
+function findBraceBlockEnd(
+  lines: string[],
+  startLineIdx: number,
+  allowHashComment: boolean = false
+): number {
   let depth = 0;
   let foundOpenBrace = false;
-  let inBacktick = false;
-  const maxScan = Math.min(lines.length, startLineIdx + 600);
+  let state: ScanState = { inBacktick: false, inBlockComment: false };
 
-  for (let i = startLineIdx; i < maxScan; i++) {
-    const stripped = stripStringsAndLineCommentsStateful(lines[i], inBacktick);
+  for (let i = startLineIdx; i < lines.length; i++) {
+    const stripped = stripCodeNoiseStateful(lines[i], state, allowHashComment);
     const line = stripped.cleanLine;
-    inBacktick = stripped.inBacktick;
+    state = stripped.state;
 
     for (let c = 0; c < line.length; c++) {
       const ch = line[c];
@@ -87,8 +100,8 @@ function findBraceBlockEnd(lines: string[], startLineIdx: number): number {
       }
     }
 
-    // If no open brace on declaration line and line ends with semicolon, it's a single-line or short declaration
-    if (!foundOpenBrace && !inBacktick && line.trim().endsWith(';')) {
+    // Single-line or interface/type declaration ending with semicolon before any brace block opens
+    if (!foundOpenBrace && !state.inBacktick && !state.inBlockComment && line.trim().endsWith(';')) {
       return i + 1;
     }
   }
@@ -96,19 +109,30 @@ function findBraceBlockEnd(lines: string[], startLineIdx: number): number {
   return startLineIdx + 1;
 }
 
-function stripStringsAndLineCommentsStateful(
+function stripCodeNoiseStateful(
   line: string,
-  startInBacktick: boolean = false
-): { cleanLine: string; inBacktick: boolean } {
+  prevState: ScanState,
+  allowHashComment: boolean = false
+): { cleanLine: string; state: ScanState } {
   let result = '';
   let inSingle = false;
   let inDouble = false;
-  let inBacktick = startInBacktick;
+  let inBacktick = prevState.inBacktick;
+  let inBlockComment = prevState.inBlockComment;
   let inRegex = false;
 
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
+    const next = i + 1 < line.length ? line[i + 1] : '';
     const prev = i > 0 ? line[i - 1] : '';
+
+    if (inBlockComment) {
+      if (ch === '*' && next === '/') {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
 
     if (inBacktick) {
       if (ch === '`' && prev !== '\\') {
@@ -117,18 +141,28 @@ function stripStringsAndLineCommentsStateful(
       continue;
     }
 
-    if (!inSingle && !inDouble && !inRegex) {
-      if (ch === '/' && line[i + 1] === '/') break;
-      if (ch === '#') break;
-      if (ch === '/' && line[i + 1] !== '*' && /[=(,:!&|?;\s]/.test(prev || ' ')) {
-        inRegex = true;
-        continue;
-      }
-    } else if (inRegex) {
+    if (inRegex) {
       if (ch === '/' && prev !== '\\') {
         inRegex = false;
       }
       continue;
+    }
+
+    if (!inSingle && !inDouble) {
+      if (ch === '/' && next === '/') break;
+      if (ch === '/' && next === '*') {
+        inBlockComment = true;
+        i++;
+        continue;
+      }
+      // Only treat `#` as a comment in PHP (when not `#[` attribute), never in TS/JS (`#private`) or Rust (`#[derive]`)
+      if (allowHashComment && ch === '#' && next !== '[') {
+        break;
+      }
+      if (ch === '/' && next !== '*' && /[=(,:!&|?;\s]/.test(prev || ' ')) {
+        inRegex = true;
+        continue;
+      }
     }
 
     if (ch === "'" && !inDouble && prev !== '\\') {
@@ -144,11 +178,15 @@ function stripStringsAndLineCommentsStateful(
       continue;
     }
 
-    if (!inSingle && !inDouble && !inRegex) {
+    if (!inSingle && !inDouble) {
       result += ch;
     }
   }
-  return { cleanLine: result, inBacktick };
+
+  return {
+    cleanLine: result,
+    state: { inBacktick, inBlockComment },
+  };
 }
 
 /**
@@ -160,8 +198,7 @@ function findPythonBlockEnd(lines: string[], startLineIdx: number): number {
   const baseIndent = baseIndentMatch ? baseIndentMatch[1].length : 0;
   let lastValidLine = startLineIdx + 1;
 
-  const maxScan = Math.min(lines.length, startLineIdx + 600);
-  for (let i = startLineIdx + 1; i < maxScan; i++) {
+  for (let i = startLineIdx + 1; i < lines.length; i++) {
     const raw = lines[i];
     const trimmed = raw.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
@@ -183,14 +220,12 @@ function findPythonBlockEnd(lines: string[], startLineIdx: number): number {
  */
 function findKeywordBlockEnd(lines: string[], startLineIdx: number): number {
   let depth = 0;
-  const maxScan = Math.min(lines.length, startLineIdx + 500);
 
-  for (let i = startLineIdx; i < maxScan; i++) {
+  for (let i = startLineIdx; i < lines.length; i++) {
     const clean = lines[i].replace(/--.*$/, '').trim();
     if (!clean) continue;
 
     const openers = clean.match(/\b(function|if|for|while|repeat|do)\b/g);
-    // Notice `for ... do` or `while ... do` has both loop keyword and `do` on same line; avoid double-counting
     const hasLoopAndDo = /\b(for|while)\b.*\bdo\b/.test(clean);
     if (openers) {
       depth += openers.length - (hasLoopAndDo ? 1 : 0);
@@ -248,15 +283,15 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
     'super',
   ]);
 
-  let inBacktick = false;
+  let state: ScanState = { inBacktick: false, inBlockComment: false };
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
-    const wasInBacktick = inBacktick;
-    const stripped = stripStringsAndLineCommentsStateful(raw, inBacktick);
-    inBacktick = stripped.inBacktick;
+    const wasInsideLiteralOrComment = state.inBacktick || state.inBlockComment;
+    const stripped = stripCodeNoiseStateful(raw, state, false);
+    state = stripped.state;
 
-    if (wasInBacktick) {
+    if (wasInsideLiteralOrComment) {
       continue;
     }
 
@@ -276,7 +311,7 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
         name: classMatch[1],
         kind: 'class',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: isExported,
       });
       continue;
@@ -289,7 +324,7 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
         name: ifaceMatch[1],
         kind: 'interface',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: isExported,
       });
       continue;
@@ -302,7 +337,7 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
         name: typeMatch[1],
         kind: 'type',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: isExported,
       });
       continue;
@@ -315,7 +350,7 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
         name: enumMatch[1],
         kind: 'enum',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: isExported,
       });
       continue;
@@ -330,13 +365,13 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
         name: fnMatch[1],
         kind: 'func',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: isExported,
       });
       continue;
     }
 
-    // 6. Arrow function or exported const object/handler
+    // 6. Arrow function or exported const handler
     const arrowMatch = trimmed.match(
       /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=>/
     );
@@ -345,7 +380,7 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
         name: arrowMatch[1],
         kind: 'func',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: isExported,
       });
       continue;
@@ -358,24 +393,24 @@ function parseTsJs(lines: string[]): CodeSymbol[] {
         name: exportConstMatch[1],
         kind: 'const',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: true,
       });
       continue;
     }
 
-    // 8. Class method (indented inside class)
+    // 8. Class method or getter/setter (including private `#method`)
     const indent = raw.length - raw.trimStart().length;
     if (indent >= 2 && indent <= 8) {
       const methodMatch = trimmed.match(
-        /^(?:public\s+|private\s+|protected\s+)?(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\([^;]*\)\s*(?::\s*[^{]+)?\{/
+        /^(?:public\s+|private\s+|protected\s+)?(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(#?[A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\([^;]*\)\s*(?::\s*[^{]+)?\{/
       );
       if (methodMatch && !reservedNames.has(methodMatch[1])) {
         symbols.push({
           name: methodMatch[1],
           kind: 'method',
           lineStart: i + 1,
-          lineEnd: findBraceBlockEnd(lines, i),
+          lineEnd: findBraceBlockEnd(lines, i, false),
           exported: false,
         });
       }
@@ -429,7 +464,6 @@ function parseGo(lines: string[]): CodeSymbol[] {
     const trimmed = lines[i].trim();
     if (!trimmed || trimmed.startsWith('//')) continue;
 
-    // Function or receiver method: func (r *Repo) Name(...) or func Name(...)
     const fnMatch = trimmed.match(/^func\s+(?:\([^)]+\)\s+)?([A-Za-z_]\w*)\s*\(/);
     if (fnMatch) {
       const name = fnMatch[1];
@@ -438,7 +472,7 @@ function parseGo(lines: string[]): CodeSymbol[] {
         name,
         kind: isMethod ? 'method' : 'func',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: /^[A-Z]/.test(name),
       });
       continue;
@@ -452,7 +486,7 @@ function parseGo(lines: string[]): CodeSymbol[] {
         name,
         kind,
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: /^[A-Z]/.test(name),
       });
     }
@@ -466,7 +500,7 @@ function parseRust(lines: string[]): CodeSymbol[] {
 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
-    if (!trimmed || trimmed.startsWith('//')) continue;
+    if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('#[')) continue;
 
     const isPub = /^pub(?:\([^)]*\))?\s+/.test(trimmed);
 
@@ -478,7 +512,7 @@ function parseRust(lines: string[]): CodeSymbol[] {
         name: fnMatch[1],
         kind: 'func',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: isPub,
       });
       continue;
@@ -498,7 +532,7 @@ function parseRust(lines: string[]): CodeSymbol[] {
         name: itemMatch[2],
         kind: kindMap[itemMatch[1]] ?? 'type',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: isPub,
       });
       continue;
@@ -510,7 +544,7 @@ function parseRust(lines: string[]): CodeSymbol[] {
         name: `impl ${implMatch[1].trim()}`,
         kind: 'impl',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: false,
       });
     }
@@ -524,7 +558,9 @@ function parsePhp(lines: string[]): CodeSymbol[] {
 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
-    if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('#')) continue;
+    if (!trimmed || trimmed.startsWith('//') || (trimmed.startsWith('#') && !trimmed.startsWith('#['))) {
+      continue;
+    }
 
     const classMatch = trimmed.match(
       /^(?:abstract\s+|final\s+|readonly\s+)?(class|interface|trait|enum)\s+([A-Za-z_]\w*)/
@@ -540,7 +576,7 @@ function parsePhp(lines: string[]): CodeSymbol[] {
         name: classMatch[2],
         kind: kindMap[classMatch[1]] ?? 'class',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, true),
         exported: true,
       });
       continue;
@@ -555,7 +591,7 @@ function parsePhp(lines: string[]): CodeSymbol[] {
         name: fnMatch[1],
         kind: 'func',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, true),
         exported: !isPrivate,
       });
     }
@@ -613,7 +649,7 @@ function parseGenericCStyle(lines: string[]): CodeSymbol[] {
         name: classMatch[2],
         kind: (classMatch[1] as SymbolKind) || 'class',
         lineStart: i + 1,
-        lineEnd: findBraceBlockEnd(lines, i),
+        lineEnd: findBraceBlockEnd(lines, i, false),
         exported: !trimmed.startsWith('private'),
       });
     }

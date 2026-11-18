@@ -1,160 +1,137 @@
-import { DetectedStack } from '../types';
+import { DetectedStack, StackId } from '../types';
 
+export const CTX_SLIM_START_MARKER = '<!-- ctx-slim:start -->';
+export const CTX_SLIM_END_MARKER = '<!-- ctx-slim:end -->';
+
+/**
+ * Generates an ultra-compact (~150 tokens) rule block wrapped in non-destructive markers.
+ * Zero supply-chain risk: never instructs the agent to run `npx --yes` or fetch remote code.
+ */
 export function generateClaudeMd(projectName: string, stacks: DetectedStack[]): string {
   const stackLabel =
-    stacks.length > 0 ? stacks.map((s) => s.name).join(', ') : 'Polyglot / General Software';
+    stacks.length > 0 ? stacks.map((s) => s.name).join(', ') : 'General Software';
 
-  return `# CLAUDE.md — AI Context & Token Optimization Rules (ctx-slim)
+  return `${CTX_SLIM_START_MARKER}
+## ContextSlim (\`ctx-slim\`) — Context & Token Protocol (${projectName} | ${stackLabel})
 
-> **Project**: \`${projectName}\`
-> **Detected Stack**: ${stackLabel}
-> **Optimization Engine**: \`ctx-slim\` (Active)
-
----
-
-## 1. MANDATORY: REPO_MAP-First Navigation (Never Read Full Files Blindly)
-
-1. **Always check \`REPO_MAP.md\` first** before opening or reading any source file.
-   - If \`REPO_MAP.md\` does not exist in the current project root yet, run \`ctx-slim map --quiet\` (or \`npx --yes github:batusayd/ctx-slim map --quiet\`) once to generate it automatically.
-2. \`REPO_MAP.md\` contains the complete directory tree and every function, class, interface, struct, and export with **exact line ranges** (\`[Lstart-Lend]\`).
-3. **Targeted Line-Range Reads Only**:
-   - Once you locate the target symbol in \`REPO_MAP.md\` (e.g., \`parseFileSymbols [L142-L168]\`), read **only** that specific line range (plus ±10 lines of context if needed).
-   - **NEVER** read an entire >150-line file when you only need a single function or class method.
-4. Respect \`.claudeignore\` and \`.aiignore\` at all times. Never inspect lockfiles, \`node_modules/\`, \`dist/\`, \`target/\`, or build artifacts.
-
----
-
-## 2. MANDATORY: Diff-Only Output Format
-
-1. **Never output full unmodified files** in chat responses.
-2. When proposing or applying code changes, use **only**:
-   - Native targeted edit tools (replacing exact target blocks), OR
-   - Minimal unified diffs / \`SEARCH / REPLACE\` blocks showing **only** the changed lines and 2–3 lines of surrounding context:
-     \`\`\`diff
-     @@ -42,4 +42,5 @@
-      export function calculateTotal(items: Item[]): number {
-     -  return items.reduce((sum, i) => sum + i.price, 0);
-     +  return items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-      }
-     \`\`\`
-3. Do not repeat unchanged functions, imports, or boilerplate code.
-
----
-
-## 3. MANDATORY: Zero-Fluff Communication Protocol
-
-1. **No conversational filler**: Skip greetings, apologies, praise ("Great question!", "Certainly!"), and closing pleasantries.
-2. **No code narration**: Do not explain what the diff you just wrote does unless there is a non-obvious architectural trade-off or edge case.
-3. **Direct technical output**: Lead immediately with the file path, line range, and action taken. Keep explanations under 3 bullet points maximum.
-
----
-
-## 4. Slash Commands (\`/diff\`, \`/plan-lite\`, \`/handoff\`, \`/slim\`)
-
-When the user invokes any of the following slash commands, strictly execute the corresponding protocol:
-
-### \`/diff\`
-- **Action**: Switch to strict **100% Diff-Only + Zero-Prose Mode**.
-- **Output**: Output ONLY the code diff or tool edit calls. Zero introductory text, zero summary text.
-
-### \`/plan-lite\`
-- **Action**: Create an ultra-compact implementation plan using \`REPO_MAP.md\` without modifying files yet.
-- **Output Format** (Max 10 lines total):
-  - \`[File Path] (Lstart-Lend)\` → Symbol to modify + 1-line technical change description.
-  - Estimated token impact & risk level (\`LOW | MED | HIGH\`).
-
-### \`/handoff\`
-- **Action**: Prepare the session for a clean context window reset.
-- **Steps**:
-  1. Run \`npx ctx-slim handoff\` to update \`CONTEXT_STATE.md\` with current git status, diff stats, and architecture state.
-  2. Populate the **Active Tasks**, **Completed Changes**, and **Next Immediate Step** sections inside \`CONTEXT_STATE.md\`.
-  3. Output a single 3-line summary telling the user they can clear context (\`/clear\`) and resume from \`CONTEXT_STATE.md\`.
-
-### \`/slim\`
-- **Action**: Synchronize and audit repository token hygiene.
-- **Steps**:
-  1. Run \`npx ctx-slim map\` to refresh \`REPO_MAP.md\`.
-  2. Run \`npx ctx-slim stats\` to report current token & USD savings.
-  3. Confirm active adherence to REPO_MAP-First, Diff-Only, and Zero-Fluff protocols.
+1. **Symbol-First Navigation (\`REPO_MAP.md\`)**:
+   - Before reading unfamiliar source files, check \`REPO_MAP.md\` (if present) to locate target symbols and \`[Lstart-Lend]\` ranges.
+   - Read targeted line ranges (±15 lines buffer) instead of entire large files.
+   - *Staleness note*: After editing a file in-session, its line numbers shift below the edit; rely on your edit offset or refresh the map via local \`ctx-slim map --quiet\` (if installed locally).
+2. **Surgical Edits & Concise Rationale**:
+   - Use targeted edit tools or minimal unified diffs. Never reprint unchanged functions or full files.
+   - Skip conversational filler, but **always include a 1–2 line technical rationale** when fixing bugs or making non-obvious trade-offs.
+3. **Session Handoff**:
+   - If \`CONTEXT_STATE.md\` exists, check it at session start for active tasks and recent changes.
+   - Slash shortcuts: \`/diff\` (diff-only output), \`/plan-lite\` (<=10-line file/range plan), \`/handoff\` (update \`CONTEXT_STATE.md\`), \`/slim\` (refresh local \`REPO_MAP.md\`).
+${CTX_SLIM_END_MARKER}
 `;
 }
 
 export function generateAntigravityRulesMd(projectName: string, stacks: DetectedStack[]): string {
   const stackLabel =
-    stacks.length > 0 ? stacks.map((s) => s.name).join(', ') : 'Polyglot / General Software';
+    stacks.length > 0 ? stacks.map((s) => s.name).join(', ') : 'General Software';
 
-  return `---
-trigger: always_on
-description: ctx-slim AI Token Optimization & Context Management Rules for ${projectName}
----
+  return `${CTX_SLIM_START_MARKER}
+## ContextSlim (\`ctx-slim\`) — Antigravity Protocol (${projectName} | ${stackLabel})
 
-# Antigravity Agent Rules — ctx-slim Optimization Engine
-
-> **Project**: \`${projectName}\` | **Stack**: ${stackLabel}
-
-## 1. REPO_MAP-First File Reading Protocol (Critical Token Saver)
-
-- **Always inspect \`REPO_MAP.md\` first** before calling \`read_file\` on source files.
-- If \`REPO_MAP.md\` does not exist in the workspace root yet, run \`ctx-slim map --quiet\` (or \`npx --yes github:batusayd/ctx-slim map --quiet\`) once to index the repository.
-- \`REPO_MAP.md\` indexes every file, class, interface, and function with **exact \`[Lstart-Lend]\` line numbers**.
-- When calling \`read_file\`, **always pass \`StartLine\` and \`EndLine\`** matching the symbol range from \`REPO_MAP.md\` instead of reading entire files from line 1 to EOF.
-- If \`CONTEXT_STATE.md\` exists in the workspace root, read it at the start of a new conversation to restore architectural context and active tasks immediately.
-- Never read files listed in \`.antigravityignore\` or \`.aiignore\`.
-
-## 2. Mandatory Diff-Only Edits & Output
-
-- Always use \`edit_file\` with minimal, surgical \`Target\` and \`Replacement\` blocks rather than overwriting entire files with \`write_file\`.
-- In chat responses, **never paste full unmodified files**. Show only concise diffs or link directly to \`[filename](file:///path#Lstart-Lend)\`.
-
-## 3. Zero-Fluff Technical Output
-
-- Eliminate conversational filler, preambles, and repetitive post-task summaries.
-- State only:
-  1. Exact files and line ranges modified.
-  2. Verification result (build/test status).
-  3. Any blocking technical decisions required.
-
-## 4. Built-in Slash Command Protocols
-
-Recognize and execute these user triggers immediately:
-
-- **\`/diff\`**: Respond exclusively with surgical code edits/diffs and zero prose explanation.
-- **\`/plan-lite\`**: Consult \`REPO_MAP.md\` and output a <=10-line bulleted execution plan listing exact \`file#Lstart-Lend\` targets before writing code.
-- **\`/handoff\`**: Run \`npx ctx-slim handoff\`, update \`CONTEXT_STATE.md\` with completed tasks and next steps, and output a 1-block handoff prompt for the next session.
-- **\`/slim\`**: Run \`npx ctx-slim map && npx ctx-slim stats\` to rebuild \`REPO_MAP.md\` and display the token/cost optimization report.
+- **Targeted Line Reads**: Check \`REPO_MAP.md\` (when present) for \`[Lstart-Lend]\` symbol ranges and pass \`StartLine\`/\`EndLine\` (±15 lines buffer) to \`read_file\` instead of reading large files in full. Note that in-session edits shift subsequent line numbers in that file.
+- **Minimal Diffs + Brief Root Cause**: Use \`edit_file\` with minimal target blocks. Never paste full unmodified files in chat. Include a brief 1–2 line root-cause note for bugfixes.
+- **Session State**: Check \`CONTEXT_STATE.md\` (if present) for session continuity.
+- **Shortcuts**: \`/diff\` (surgical diff mode), \`/plan-lite\` (<=10-line \`file#Lstart-Lend\` plan), \`/handoff\` (update \`CONTEXT_STATE.md\`), \`/slim\` (refresh local \`REPO_MAP.md\`).
+${CTX_SLIM_END_MARKER}
 `;
 }
 
 export function generateClaudeSlashCommands(): Record<string, string> {
   return {
-    'diff.md': `Switch to strict Diff-Only + Zero-Fluff mode for this request.
-1. Consult \`REPO_MAP.md\` to find exact symbol line ranges (\`Lstart-Lend\`).
-2. Read only those line ranges.
-3. Apply or output ONLY the minimal unified diff. Do not include any conversational preamble or post-summary.
+    'diff.md': `Apply or output ONLY the minimal unified diff or targeted edit for this task, plus at most a 1-line technical rationale if non-obvious.
+1. If \`REPO_MAP.md\` exists, locate the target \`[Lstart-Lend]\` symbol range first.
+2. Read only the relevant line range (±15 lines).
+3. Do not repeat unchanged code or include conversational filler.
 
 Task: $ARGUMENTS
 `,
-    'plan-lite.md': `Create an ultra-compact (<10 lines) technical execution plan without modifying files yet:
-1. Read \`REPO_MAP.md\` to identify the exact files, functions, and \`[Lstart-Lend]\` ranges affected.
-2. Output a bulleted list of \`file:Lstart-Lend -> change summary\`.
-3. State estimated token impact and wait for confirmation.
+    'plan-lite.md': `Create a compact (<=10 lines) technical execution plan before modifying any files:
+1. Check \`REPO_MAP.md\` (if present) to identify affected files, symbols, and \`[Lstart-Lend]\` ranges.
+2. List each target as \`file:Lstart-Lend -> planned change\`.
+3. Note any edge cases or risks in 1–2 bullets and wait for confirmation.
 
 Task: $ARGUMENTS
 `,
-    'handoff.md': `Prepare this session for a zero-loss context handoff:
-1. Execute \`npx ctx-slim handoff\` to refresh \`CONTEXT_STATE.md\`.
-2. Update the Active Tasks, Key Architectural Decisions, and Next Session Prompt sections in \`CONTEXT_STATE.md\`.
-3. Output a 3-line confirmation so I can run \`/clear\` and resume cleanly.
+    'handoff.md': `Prepare this session for a clean context reset (\`/clear\`):
+1. If \`ctx-slim\` is installed locally (\`command -v ctx-slim\`), run \`ctx-slim handoff\`; otherwise update \`CONTEXT_STATE.md\` directly using \`git status --short\` and \`git diff --stat\`.
+2. Record Completed Changes, Key Architectural Decisions, and Next Immediate Steps inside \`CONTEXT_STATE.md\`.
+3. Output a 3-line confirmation so the session can be cleared safely.
 `,
-    'slim.md': `Refresh and audit ctx-slim token optimization:
-1. Execute \`npx ctx-slim map\` to update \`REPO_MAP.md\` with current symbol line numbers.
-2. Execute \`npx ctx-slim stats\` to display token and USD savings.
-3. Summarize the current repo map compression ratio in 2 lines.
+    'slim.md': `Refresh local repository map and inspect context footprint:
+1. If \`ctx-slim\` is installed locally (\`command -v ctx-slim\`), run \`ctx-slim map\` and \`ctx-slim stats\`.
+2. Summarize the active file count and symbol map coverage in 2 lines.
 `,
   };
 }
 
-export function generatePostCommitHook(): string {
+/**
+ * Generates official Claude Code `.claude/settings.json` `permissions.deny` rules
+ * so Claude Code is prevented at the tool permission layer from reading lockfiles and build bloat.
+ */
+export function getClaudeSettingsDenyRules(stacks: DetectedStack[]): string[] {
+  const rules = new Set<string>([
+    'Read(package-lock.json)',
+    'Read(pnpm-lock.yaml)',
+    'Read(yarn.lock)',
+    'Read(bun.lockb)',
+    'Read(bun.lock)',
+    'Read(Cargo.lock)',
+    'Read(poetry.lock)',
+    'Read(Pipfile.lock)',
+    'Read(uv.lock)',
+    'Read(go.sum)',
+    'Read(composer.lock)',
+    'Read(Gemfile.lock)',
+    'Read(dist/**)',
+    'Read(build/**)',
+    'Read(coverage/**)',
+    'Read(*.min.js)',
+    'Read(*.min.css)',
+    'Read(*.bundle.js)',
+    'Read(*.map)',
+    'Read(*.tsbuildinfo)',
+  ]);
+
+  const stackIds = new Set<StackId>(stacks.map((s) => s.id));
+  if (stackIds.has('node-ts') || stackIds.size === 0) {
+    rules.add('Read(node_modules/**)');
+    rules.add('Read(.next/**)');
+    rules.add('Read(.nuxt/**)');
+    rules.add('Read(.turbo/**)');
+  }
+  if (stackIds.has('python')) {
+    rules.add('Read(__pycache__/**)');
+    rules.add('Read(.venv/**)');
+    rules.add('Read(venv/**)');
+    rules.add('Read(.pytest_cache/**)');
+  }
+  if (stackIds.has('rust') || stackIds.has('java-kotlin')) {
+    rules.add('Read(target/**)');
+  }
+  if (stackIds.has('php') || stackIds.has('go') || stackIds.has('ruby')) {
+    rules.add('Read(vendor/**)');
+  }
+
+  return Array.from(rules);
+}
+
+/**
+ * Generates a safe post-commit hook that NEVER executes an arbitrary `./dist/index.js` in the user's repo.
+ * It resolves either global `ctx-slim`, local `./node_modules/.bin/ctx-slim`, or the verified CLI installation path.
+ */
+export function generatePostCommitHook(verifiedCliPath?: string): string {
+  const escapedCliPath = verifiedCliPath ? verifiedCliPath.replace(/\\/g, '/') : '';
+  const fallbackClause = escapedCliPath
+    ? `elif [ -f "${escapedCliPath}" ]; then\n  node "${escapedCliPath}" map --quiet >/dev/null 2>&1 &`
+    : '';
+
   return `#!/bin/sh
 # ============================================================================
 # ctx-slim post-commit hook
@@ -163,10 +140,9 @@ export function generatePostCommitHook(): string {
 
 if command -v ctx-slim >/dev/null 2>&1; then
   ctx-slim map --quiet >/dev/null 2>&1 &
-elif [ -f "./dist/index.js" ]; then
-  node ./dist/index.js map --quiet >/dev/null 2>&1 &
-elif command -v npx >/dev/null 2>&1; then
-  npx --no-install ctx-slim map --quiet >/dev/null 2>&1 &
+elif [ -x "./node_modules/.bin/ctx-slim" ]; then
+  ./node_modules/.bin/ctx-slim map --quiet >/dev/null 2>&1 &
+${fallbackClause}
 fi
 
 exit 0

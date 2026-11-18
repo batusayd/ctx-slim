@@ -16,24 +16,28 @@ import { buildRepoMap } from './map';
 
 const MODEL_PRICING_LIST: ModelPricing[] = [
   {
-    name: 'Claude Opus 4 / 3.5',
+    name: 'Claude Opus 4.5 / 4',
     provider: 'Anthropic',
     inputPerMillionUsd: 15.0,
+    cachedInputPerMillionUsd: 1.5,
   },
   {
-    name: 'Claude Sonnet 4 / 3.7',
+    name: 'Claude Sonnet 4.5 / 4',
     provider: 'Anthropic',
     inputPerMillionUsd: 3.0,
+    cachedInputPerMillionUsd: 0.3,
   },
   {
     name: 'Gemini 2.5 Pro',
     provider: 'Google',
     inputPerMillionUsd: 1.25,
+    cachedInputPerMillionUsd: 0.31,
   },
   {
-    name: 'GPT-4.1 / GPT-4o',
+    name: 'GPT-4.1',
     provider: 'OpenAI',
-    inputPerMillionUsd: 2.5,
+    inputPerMillionUsd: 2.0,
+    cachedInputPerMillionUsd: 0.5,
   },
 ];
 
@@ -41,16 +45,29 @@ interface IgnoredScanStats {
   ignoredFileCount: number;
   ignoredBytes: number;
   ignoredTokens: number;
+  lockAndBuildBytes: number;
+  lockAndBuildTokens: number;
 }
 
-/**
- * Scans ignored files (lockfiles, dist, build caches, shallow node_modules) to quantify
- * how much bloat is prevented from entering the AI context window.
- */
+const LOCK_AND_BUNDLE_NAMES = new Set([
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lock',
+  'Cargo.lock',
+  'poetry.lock',
+  'Pipfile.lock',
+  'uv.lock',
+  'go.sum',
+  'composer.lock',
+  'Gemfile.lock',
+]);
+
 function scanIgnoredBloat(cwd: string, matcher: IgnoreMatcher): IgnoredScanStats {
   let ignoredFileCount = 0;
   let ignoredBytes = 0;
-  const maxFilesToStat = 4000; // Keep CLI instant (<150ms) even with large node_modules
+  let lockAndBuildBytes = 0;
+  const maxFilesToStat = 4000;
 
   function walk(dir: string, depth: number, insideIgnoredDir: boolean): void {
     if (depth > 5 || ignoredFileCount >= maxFilesToStat) return;
@@ -64,7 +81,7 @@ function scanIgnoredBloat(cwd: string, matcher: IgnoreMatcher): IgnoredScanStats
 
     for (const entry of entries) {
       if (ignoredFileCount >= maxFilesToStat) break;
-      if (entry.name === '.git') continue; // Never count internal git objects as AI prompt files
+      if (entry.name === '.git') continue;
 
       const fullPath = path.join(dir, entry.name);
       const relPath = path.relative(cwd, fullPath).replace(/\\/g, '/');
@@ -73,12 +90,20 @@ function scanIgnoredBloat(cwd: string, matcher: IgnoreMatcher): IgnoredScanStats
       if (entry.isDirectory()) {
         walk(fullPath, depth + 1, isIgnored);
       } else if (entry.isFile() && isIgnored) {
-        // Don't count ctx-slim's own generated markdown files as bloat
         if (entry.name === 'REPO_MAP.md' || entry.name === 'CONTEXT_STATE.md') continue;
         try {
           const st = fs.statSync(fullPath);
           ignoredFileCount++;
           ignoredBytes += st.size;
+          if (
+            LOCK_AND_BUNDLE_NAMES.has(entry.name) ||
+            relPath.startsWith('dist/') ||
+            relPath.startsWith('build/') ||
+            entry.name.endsWith('.min.js') ||
+            entry.name.endsWith('.map')
+          ) {
+            lockAndBuildBytes += st.size;
+          }
         } catch {
           // Ignore stat errors
         }
@@ -92,6 +117,8 @@ function scanIgnoredBloat(cwd: string, matcher: IgnoreMatcher): IgnoredScanStats
     ignoredFileCount,
     ignoredBytes,
     ignoredTokens: estimateTokens(ignoredBytes),
+    lockAndBuildBytes,
+    lockAndBuildTokens: estimateTokens(lockAndBuildBytes),
   };
 }
 
@@ -101,64 +128,87 @@ export function runStatsCommand(options: StatsOptions): void {
   const mapResult = buildRepoMap({ cwd, output: 'REPO_MAP.md', quiet: true });
   const ignoredStats = scanIgnoredBloat(cwd, matcher);
 
+  const totalFiles = Math.max(1, mapResult.totalFiles);
   const rawSourceTokens = mapResult.rawCodeTokens;
-  const ignoredTokens = ignoredStats.ignoredTokens;
-  const unfilteredTotalTokens = rawSourceTokens + ignoredTokens;
+  const avgFileTokens = Math.round(rawSourceTokens / totalFiles);
+  const avgTokensPerLine = mapResult.totalLines > 0 ? rawSourceTokens / mapResult.totalLines : 8;
 
-  // With ctx-slim: Agent reads REPO_MAP.md + targeted [Lstart-Lend] slice (~12% of active source code on average)
-  const targetedSliceTokens = Math.max(
-    Math.min(rawSourceTokens, 150),
-    Math.round(rawSourceTokens * 0.12)
+  // Compute empirical average symbol span from actual parsed `[Lstart-Lend]` symbols in this repository
+  let totalSymbolSpanLines = 0;
+  let symbolCount = 0;
+  for (const entry of mapResult.entries) {
+    for (const sym of entry.symbols) {
+      const span = Math.max(1, sym.lineEnd - sym.lineStart + 1);
+      totalSymbolSpanLines += span;
+      symbolCount++;
+    }
+  }
+  const avgSymbolLines =
+    symbolCount > 0 ? Math.round(totalSymbolSpanLines / symbolCount) : 30;
+  // Target read window = symbol span + ±15 lines safety buffer
+  const avgTargetedSliceLines = avgSymbolLines + 30;
+  const avgTargetedSliceTokens = Math.min(
+    avgFileTokens,
+    Math.round(avgTargetedSliceLines * avgTokensPerLine)
   );
-  const optimizedTurnTokens =
-    rawSourceTokens > 0 ? Math.min(rawSourceTokens, mapResult.mapTokens + targetedSliceTokens) : 0;
 
-  // Savings vs Full Active Source Read
-  const savedVsSourceTokens = Math.max(0, rawSourceTokens - optimizedTurnTokens);
-  const savedVsSourcePct =
-    rawSourceTokens > 0 ? (savedVsSourceTokens / rawSourceTokens) * 100 : 0;
+  // Realistic Task Modeling:
+  // Baseline (No ctx-slim): Agent runs grep/glob and reads ~4 candidate files in full (or all files if repo < 4 files)
+  const candidateFilesPerTask = Math.min(totalFiles, 4);
+  const baselineTaskTokens = Math.min(rawSourceTokens, avgFileTokens * candidateFilesPerTask);
 
-  // Savings vs Unfiltered Project (Source + Lockfiles/Dist/Bloat)
-  const savedVsUnfilteredTokens = Math.max(0, unfilteredTotalTokens - optimizedTurnTokens);
-  const savedVsUnfilteredPct =
-    unfilteredTotalTokens > 0 ? (savedVsUnfilteredTokens / unfilteredTotalTokens) * 100 : 0;
+  // With ctx-slim: Compact CLAUDE.md rule block (~155 tok) + REPO_MAP lookup + 2 targeted symbol range reads
+  const ruleOverheadTokens = 155;
+  const targetedSlicesCount = Math.min(candidateFilesPerTask, 2);
+  const slimTaskTokens = Math.min(
+    baselineTaskTokens,
+    ruleOverheadTokens +
+      Math.min(mapResult.mapTokens, 1200) +
+      avgTargetedSliceTokens * targetedSlicesCount
+  );
 
-  const turnsPerSession = 20;
-  const sessionsPerMonth = 100;
+  const savedPerTaskTokens = Math.max(0, baselineTaskTokens - slimTaskTokens);
+  const savedPerTaskPct =
+    baselineTaskTokens > 0 ? (savedPerTaskTokens / baselineTaskTokens) * 100 : 0;
+
+  const tasksPerSession = 15;
 
   if (options.json) {
     const jsonOutput = {
       project: path.basename(cwd),
-      files: {
+      methodology: 'Lexical BPE-approximation; compares reading 4 candidate files in full vs REPO_MAP + 2 targeted [Lstart-Lend] symbol slices (±15 lines) + 155-token rule overhead.',
+      repositoryMetrics: {
         activeSourceFiles: mapResult.totalFiles,
         activeSourceLines: mapResult.totalLines,
         mappedSymbols: mapResult.totalSymbols,
-        ignoredBloatFiles: ignoredStats.ignoredFileCount,
-      },
-      tokens: {
-        unfilteredTotalTokens,
-        ignoredBloatTokens: ignoredTokens,
-        activeSourceTokens: rawSourceTokens,
+        avgFileTokens,
+        avgSymbolLines,
+        avgTargetedSliceTokens,
+        totalSourceTokens: rawSourceTokens,
         repoMapTokens: mapResult.mapTokens,
-        targetedSliceTokens,
-        optimizedTurnTokens,
-        savedVsSourceTokens,
-        savedVsSourcePercent: Number(savedVsSourcePct.toFixed(2)),
-        savedVsUnfilteredTokens,
-        savedVsUnfilteredPercent: Number(savedVsUnfilteredPct.toFixed(2)),
+        deniedLockAndBuildTokens: ignoredStats.lockAndBuildTokens,
+      },
+      perTaskComparison: {
+        baselineCandidateFilesRead: candidateFilesPerTask,
+        baselineTaskTokens,
+        slimRuleOverheadTokens: ruleOverheadTokens,
+        slimTaskTokens,
+        netSavedPerTaskTokens: savedPerTaskTokens,
+        netSavedPerTaskPercent: Number(savedPerTaskPct.toFixed(1)),
       },
       costEstimatesUsd: MODEL_PRICING_LIST.map((m) => {
-        const beforePerTurn = (rawSourceTokens / 1_000_000) * m.inputPerMillionUsd;
-        const afterPerTurn = (optimizedTurnTokens / 1_000_000) * m.inputPerMillionUsd;
-        const savedPerTurn = Math.max(0, beforePerTurn - afterPerTurn);
+        const beforeSessionUsd =
+          ((baselineTaskTokens * tasksPerSession) / 1_000_000) * m.inputPerMillionUsd;
+        const afterSessionUsd =
+          ((slimTaskTokens * tasksPerSession) / 1_000_000) * m.inputPerMillionUsd;
+        const savedSessionUsd = Math.max(0, beforeSessionUsd - afterSessionUsd);
         return {
           model: m.name,
-          pricePerMillionInputUsd: m.inputPerMillionUsd,
-          savedPerTurnUsd: Number(savedPerTurn.toFixed(6)),
-          savedPer20TurnSessionUsd: Number((savedPerTurn * turnsPerSession).toFixed(4)),
-          savedPerMonth100SessionsUsd: Number(
-            (savedPerTurn * turnsPerSession * sessionsPerMonth).toFixed(2)
-          ),
+          inputPerMillionUsd: m.inputPerMillionUsd,
+          cachedInputPerMillionUsd: m.cachedInputPerMillionUsd,
+          before15TaskSessionUsd: Number(beforeSessionUsd.toFixed(4)),
+          withCtxSlim15TaskSessionUsd: Number(afterSessionUsd.toFixed(4)),
+          savedPer15TaskSessionUsd: Number(savedSessionUsd.toFixed(4)),
         };
       }),
     };
@@ -167,103 +217,90 @@ export function runStatsCommand(options: StatsOptions): void {
   }
 
   printBanner();
-  log.step('Analyzing repository token footprint & cost savings...', cwd);
+  log.step('Analyzing repository structure & empirical symbol spans...', cwd);
   console.log('');
 
-  // Table 1: Token Footprint Breakdown
-  const footprintRows: string[][] = [
+  const repoSummaryRows: string[][] = [
     [
-      `${c.red('1. Unfiltered Project')} ${c.gray('(Source + Locks/Build/Cache)')}`,
-      formatNumber(mapResult.totalFiles + ignoredStats.ignoredFileCount),
-      formatBytes(mapResult.totalBytes + ignoredStats.ignoredBytes),
-      c.red(formatNumber(unfilteredTotalTokens) + ' tok'),
-      c.gray('Baseline (0% saved)'),
+      `${c.white('Active Source Codebase')} ${c.gray('(All non-ignored files)')}`,
+      `${formatNumber(mapResult.totalFiles)} files`,
+      `${formatNumber(mapResult.totalLines)} lines`,
+      `${formatNumber(rawSourceTokens)} tok`,
+      `Avg file: ~${formatNumber(avgFileTokens)} tok`,
     ],
     [
-      `${c.yellow('2. Ignored Bloat Blocked')} ${c.gray('(.claudeignore / .aiignore)')}`,
-      formatNumber(ignoredStats.ignoredFileCount),
-      formatBytes(ignoredStats.ignoredBytes),
-      c.yellow('-' + formatNumber(ignoredTokens) + ' tok'),
-      c.yellow('Blocked from AI context'),
+      `${c.brightCyan('REPO_MAP.md Symbol Index')} ${c.gray(`(${mapResult.totalSymbols} symbols)`)}`,
+      '1 file',
+      `${formatNumber(mapResult.markdown.split(/\r?\n/).length)} lines`,
+      c.brightCyan(`${formatNumber(mapResult.mapTokens)} tok`),
+      `Avg symbol span: ${avgSymbolLines}L`,
     ],
     [
-      `${c.white('3. Active Source Code')} ${c.gray('(Full-File Read w/o Map)')}`,
-      formatNumber(mapResult.totalFiles),
-      formatBytes(mapResult.totalBytes),
-      c.white(formatNumber(rawSourceTokens) + ' tok'),
-      c.gray('Standard AI Agent Read'),
+      `${c.yellow('Denied Lock/Build Bloat')} ${c.gray('(.claude/settings.json)')}`,
+      `${formatNumber(ignoredStats.ignoredFileCount)} files`,
+      formatBytes(ignoredStats.lockAndBuildBytes),
+      c.yellow(`${formatNumber(ignoredStats.lockAndBuildTokens)} tok`),
+      'Blocked via permissions.deny',
     ],
     [
-      `${c.brightCyan('4. REPO_MAP.md Index')} ${c.gray(`(${mapResult.totalSymbols} symbols w/ [Lstart-Lend])`)}`,
-      '1',
-      formatBytes(Buffer.byteLength(mapResult.markdown, 'utf8')),
-      c.brightCyan(formatNumber(mapResult.mapTokens) + ' tok'),
-      c.brightCyan(`${mapResult.savingsPercent.toFixed(1)}% smaller than source`),
+      `${c.gray('Baseline Task Read')} ${c.gray(`(Grep + ${candidateFilesPerTask} full files)`)}`,
+      `${candidateFilesPerTask} files`,
+      `~${formatNumber(Math.round(( mapResult.totalLines / totalFiles ) * candidateFilesPerTask))} lines`,
+      c.yellow(`${formatNumber(baselineTaskTokens)} tok`),
+      'Standard agent exploration',
     ],
     [
-      `${c.bold(c.brightGreen('5. ctx-slim Optimized Turn'))} ${c.gray('(Map + 12% Line Slice)')}`,
-      '1–2 slices',
-      formatBytes(Math.round( optimizedTurnTokens * 4 )),
-      c.bold(c.brightGreen(formatNumber(optimizedTurnTokens) + ' tok')),
-      c.bold(
-        c.brightGreen(
-          `${savedVsSourcePct.toFixed(1)}% vs Source (${savedVsUnfilteredPct.toFixed(1)}% vs Raw)`
-        )
-      ),
+      `${c.bold(c.brightGreen('ctx-slim Task Read'))} ${c.gray('(Rule + Map + 2 symbol slices)')}`,
+      `${targetedSlicesCount} slices`,
+      `~${formatNumber(avgTargetedSliceLines * targetedSlicesCount)} lines`,
+      c.bold(c.brightGreen(`${formatNumber(slimTaskTokens)} tok`)),
+      c.bold(c.brightGreen(`-${savedPerTaskPct.toFixed(1)}% net input reduction`)),
     ],
   ];
 
-  console.log(`  ${c.bold('📊 1. Context & Token Footprint Analysis (approx. chars / 4)')}`);
+  console.log(`  ${c.bold('📊 1. Empirical Repository & Task Token Breakdown')}`);
   console.log(
     renderTable(
-      ['Context Layer / Strategy', 'Files', 'Size', 'Est. Tokens', 'Impact / Reduction'],
-      footprintRows,
+      ['Layer / Scenario', 'Scope', 'Lines / Size', 'Lexical Tokens', 'Notes'],
+      repoSummaryRows,
       ['left', 'right', 'right', 'right', 'left']
     )
   );
   console.log('');
 
-  // Table 2: Model Cost & Savings Comparison
-  // Compare both:
-  // - Savings vs Full Source Read (active files)
-  // - Plus we show per-turn, per 20-turn session, and monthly (100 sessions = 2,000 turns)
-  // Notice: If the repo also has ignored lockfiles/dist bloat, an unconfigured agent often ingests lockfiles/build files too;
-  // we calculate savings based on Active Source Read AND show Effective Total Savings!
-  const effectiveBeforeTokens = Math.max(
-    rawSourceTokens,
-    rawSourceTokens + Math.min(ignoredTokens, 25_000) // Realistic accidental lockfile/build ingestion per turn
-  );
-  const effectiveSavedPerTurn = Math.max(0, effectiveBeforeTokens - optimizedTurnTokens);
-
   const costRows: string[][] = MODEL_PRICING_LIST.map((m) => {
-    const beforeTurnUsd = (effectiveBeforeTokens / 1_000_000) * m.inputPerMillionUsd;
-    const afterTurnUsd = (optimizedTurnTokens / 1_000_000) * m.inputPerMillionUsd;
-    const savedTurnUsd = Math.max(0, beforeTurnUsd - afterTurnUsd);
-    const savedSessionUsd = savedTurnUsd * turnsPerSession;
-    const savedMonthlyUsd = savedSessionUsd * sessionsPerMonth;
+    const beforeSessionUsd =
+      ((baselineTaskTokens * tasksPerSession) / 1_000_000) * m.inputPerMillionUsd;
+    const afterSessionUsd =
+      ((slimTaskTokens * tasksPerSession) / 1_000_000) * m.inputPerMillionUsd;
+    const savedSessionUsd = Math.max(0, beforeSessionUsd - afterSessionUsd);
+
+    const cachedRate = m.cachedInputPerMillionUsd ?? m.inputPerMillionUsd * 0.1;
+    const savedWithCacheUsd =
+      (((baselineTaskTokens - slimTaskTokens) * tasksPerSession) / 1_000_000) * cachedRate;
 
     return [
-      `${c.bold(m.name)} ${c.gray(`(${m.provider})`)}`,
-      `$${m.inputPerMillionUsd.toFixed(2)} / 1M`,
-      c.yellow(formatUsd(beforeTurnUsd * turnsPerSession)),
-      c.brightCyan(formatUsd(afterTurnUsd * turnsPerSession)),
+      `${c.bold(m.name)}`,
+      `$${m.inputPerMillionUsd.toFixed(2)} / $${cachedRate.toFixed(2)}`,
+      c.yellow(formatUsd(beforeSessionUsd)),
+      c.brightCyan(formatUsd(afterSessionUsd)),
       c.brightGreen(formatUsd(savedSessionUsd)),
-      c.bold(c.brightGreen(formatUsd(savedMonthlyUsd) + '/mo')),
+      c.gray(formatUsd(savedWithCacheUsd)),
     ];
   });
 
   console.log(
-    `  ${c.bold('💰 2. Estimated USD Savings Across AI Models')} ${c.gray(`(20 turns/session, 100 sessions/mo)`)}`
+    `  ${c.bold('💰 2. Estimated Input Cost per 15-Task Coding Session')} ${c.gray('(Uncached vs Prompt-Cached)')}`
   );
   console.log(
     renderTable(
       [
         'AI Model',
-        'Input Price',
-        'Before (20 Turns)',
+        'Input (Std / Cached)',
+        'Baseline (15 Tasks)',
         'With ctx-slim',
-        'Saved / Session',
-        'Saved / Month',
+        'Saved (Uncached)',
+        'Saved (Cached)',
       ],
       costRows,
       ['left', 'right', 'right', 'right', 'right', 'right']
@@ -272,7 +309,7 @@ export function runStatsCommand(options: StatsOptions): void {
 
   console.log('');
   console.log(
-    `  ${c.brightGreen('✔')} ${c.bold('Summary')}: ${c.brightCyan('ctx-slim')} eliminates ${c.bold(formatNumber(ignoredTokens) + ' tokens')} of ignored bloat and saves ${c.bold(formatNumber(effectiveSavedPerTurn * turnsPerSession) + ' tokens')} per 20-turn coding session.`
+    `  ${c.cyan('ℹ')} ${c.bold('Methodology')}: Token counts use lexical BPE approximation. Task comparison models reading ${candidateFilesPerTask} candidate files in full (${formatNumber(baselineTaskTokens)} tok) vs ${c.brightCyan('ctx-slim')} rule overhead (${ruleOverheadTokens} tok) + map lookup + ${targetedSlicesCount} empirical symbol slices (${avgSymbolLines}L + ±15L buffer = ${formatNumber(avgTargetedSliceTokens)} tok/slice).`
   );
   console.log('');
 }

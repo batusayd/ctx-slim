@@ -24,6 +24,8 @@ interface ParsedArgs {
   positionals: string[];
 }
 
+const VALUE_FLAGS = new Set(['dir', 'd', 'output', 'o', 'task', 't', 'max-depth']);
+
 function parseCliArgs(argv: string[]): ParsedArgs {
   const args = argv.slice(2);
   let command = '';
@@ -41,7 +43,7 @@ function parseCliArgs(argv: string[]): ParsedArgs {
       } else {
         const key = arg.slice(2);
         const next = args[i + 1];
-        if (next && !next.startsWith('-')) {
+        if (VALUE_FLAGS.has(key) && next && !next.startsWith('-')) {
           flags[key] = next;
           i++;
         } else {
@@ -49,13 +51,35 @@ function parseCliArgs(argv: string[]): ParsedArgs {
         }
       }
     } else if (arg.startsWith('-') && arg.length > 1) {
-      const shortKey = arg.slice(1);
-      flags[shortKey] = true;
+      const eqIdx = arg.indexOf('=');
+      if (eqIdx !== -1) {
+        const key = arg.slice(1, eqIdx);
+        const val = arg.slice(eqIdx + 1);
+        flags[key] = val;
+      } else {
+        const shortKey = arg.slice(1);
+        const next = args[i + 1];
+        if (VALUE_FLAGS.has(shortKey) && next && !next.startsWith('-')) {
+          flags[shortKey] = next;
+          i++;
+        } else if (shortKey.length > 1) {
+          for (const ch of shortKey) {
+            flags[ch] = true;
+          }
+        } else {
+          flags[shortKey] = true;
+        }
+      }
     } else if (!command) {
       command = arg.toLowerCase();
     } else {
       positionals.push(arg);
     }
+  }
+
+  // If user ran `ctx-slim --global` without specifying `init`, default to `init`
+  if (!command && (flags.global || flags.g)) {
+    command = 'init';
   }
 
   return { command, flags, positionals };
@@ -68,16 +92,18 @@ function printHelp(): void {
     ${c.brightCyan('npx ctx-slim')} ${c.yellow('<command>')} ${c.gray('[options]')}
 
   ${c.bold('COMMANDS')}
-    ${c.brightCyan('init')}       Auto-detect stack, generate ${c.white('.claudeignore')}, ${c.white('.antigravityignore')}, ${c.white('.aiignore')},
-               ${c.white('CLAUDE.md')}, ${c.white('.antigravity/rules.md')}, slash commands & initial ${c.white('REPO_MAP.md')}
+    ${c.brightCyan('init')}       Auto-detect stack, configure ${c.white('.claude/settings.json')} (${c.cyan('permissions.deny')}),
+               non-destructively upsert ${c.white('CLAUDE.md')} & ${c.white('.antigravity/rules.md')}, and build ${c.white('REPO_MAP.md')}
     ${c.brightCyan('map')}        Scan codebase & generate ${c.white('REPO_MAP.md')} with symbol definitions and ${c.cyan('[Lstart-Lend]')} ranges
+    ${c.brightCyan('watch')}      Live-watch source files and keep ${c.white('REPO_MAP.md')} automatically synchronized on save
     ${c.brightCyan('handoff')}    Generate/update ${c.white('CONTEXT_STATE.md')} (git diff --stat, architecture, active tasks)
-    ${c.brightCyan('stats')}      Calculate token & USD savings across Claude Opus/Sonnet, Gemini Pro & GPT-4
-    ${c.brightCyan('clean')}      Remove all ctx-slim generated files, rules & Git hooks from the project (alias: ${c.white('uninstall')})
+    ${c.brightCyan('stats')}      Empirical token & cost estimator based on actual repo file & symbol spans
+    ${c.brightCyan('clean')}      Non-destructively remove ctx-slim blocks, rules & hooks (alias: ${c.white('uninstall')})
 
   ${c.bold('OPTIONS')}
-    ${c.yellow('--global, -g')}        Install/remove rules globally in ${c.white('~/.claude/')} & ${c.white('~/.antigravity/')} for ALL projects
+    ${c.yellow('--global, -g')}        Install/remove rules globally in ${c.white('~/.claude/')} & ${c.white('~/.antigravity/')} (non-destructive)
     ${c.yellow('--with-hooks')}        Install ${c.white('.git/hooks/post-commit')} to auto-update REPO_MAP.md (${c.cyan('init')})
+    ${c.yellow('--watch, -w')}         Watch source files for changes and live-update REPO_MAP.md (${c.cyan('map')})
     ${c.yellow('--force, -f')}         Overwrite existing configuration files (${c.cyan('init')})
     ${c.yellow('--output, -o <file>')} Custom output path for ${c.cyan('map')} or ${c.cyan('handoff')}
     ${c.yellow('--task <text>')}       Add a priority active task item when running ${c.cyan('handoff')}
@@ -132,7 +158,8 @@ function main(): void {
         break;
       }
 
-      case 'map': {
+      case 'map':
+      case 'watch': {
         const output =
           typeof flags.output === 'string'
             ? flags.output
@@ -145,6 +172,7 @@ function main(): void {
           cwd: targetDir,
           output,
           maxDepth: Number.isNaN(maxDepth) ? 8 : maxDepth,
+          watch: command === 'watch' || Boolean(flags.watch || flags.w),
           quiet,
         });
         break;
@@ -157,7 +185,12 @@ function main(): void {
             : typeof flags.o === 'string'
               ? flags.o
               : 'CONTEXT_STATE.md';
-        const task = typeof flags.task === 'string' ? flags.task : undefined;
+        const task =
+          typeof flags.task === 'string'
+            ? flags.task
+            : typeof flags.t === 'string'
+              ? flags.t
+              : undefined;
         runHandoffCommand({
           cwd: targetDir,
           output,

@@ -128,7 +128,7 @@ Navigate to **your own project directory** and run:
 
 ```bash
 cd /path/to/your-project
-npx github:yourusername/ctx-slim init --with-hooks
+npx github:batusayd/ctx-slim init --with-hooks
 ```
 
 ### Option 2: Clone from GitHub & Link Globally (Recommended for Local Use)
@@ -136,7 +136,7 @@ Clone this repository once, build it, and link it globally on your machine so `c
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/yourusername/ctx-slim.git
+git clone https://github.com/batusayd/ctx-slim.git
 cd ctx-slim
 
 # 2. Install TypeScript compiler & build the CLI

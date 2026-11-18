@@ -18,16 +18,16 @@
     "claudeignore",
     "aiignore"
   ],
-  "homepage": "https://github.com/yourusername/ctx-slim#readme",
+  "homepage": "https://github.com/batusayd/ctx-slim#readme",
   "bugs": {
-    "url": "https://github.com/yourusername/ctx-slim/issues"
+    "url": "https://github.com/batusayd/ctx-slim/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourusername/ctx-slim.git"
+    "url": "git+https://github.com/batusayd/ctx-slim.git"
   },
   "license": "MIT",
-  "author": "",
+  "author": "batusayd",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
